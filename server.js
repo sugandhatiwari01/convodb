@@ -6,6 +6,7 @@ const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const session = require('express-session');
+const MongoStore = require('connect-mongo');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
@@ -13,42 +14,47 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 
-const envPath = path.resolve(__dirname, '.env');
-console.log('Attempting to load .env from:', envPath);
+const envPath = path.join(__dirname, '.env');
 if (fs.existsSync(envPath)) {
   require('dotenv').config({ path: envPath });
-  console.log('Successfully found .env file at:', envPath);
+  console.log('Successfully loaded .env file at:', envPath);
 } else {
-  console.error('Error: .env file not found at:', envPath);
+  console.log('No .env file found at:', envPath, 'using environment variables');
 }
 
 console.log('Loaded environment variables:', {
-  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
-  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Not set',
+  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? 'Set' : 'Not set',
   GOOGLE_CALLBACK_URL: process.env.GOOGLE_CALLBACK_URL,
-  JWT_SECRET: process.env.JWT_SECRET,
-  MONGO_URL: process.env.MONGO_URL,
+  JWT_SECRET: process.env.JWT_SECRET ? 'Set' : 'Not set',
+  MONGO_URL: process.env.MONGO_URL ? 'Set' : 'Not set',
 });
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:3000', 'https://your-frontend.onrender.com'],
-    methods: ['GET', 'POST'],
+    origin: ['http://localhost:3000', 'https://convo-frontend.onrender.com','https://localhost:3000'],
+    methods: ['GET', 'POST', 'GET'],
     credentials: true,
   },
 });
 
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Serve static files from Uploads folder
+app.use('/Uploads', express.static(path.join(__dirname, 'Uploads')));
 
-mongoose.connect(process.env.MONGO_URL || 'mongodb://localhost/convo-app', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
+// Create Uploads folder if it doesn't exist
+const uploadDir = path.join(__dirname, 'Uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
+
+// MongoDB connection
+mongoose.connect(process.env.MONGO_URL || 'mongodb://localhost/convo-app')
   .then(() => console.log('Connected to MongoDB'))
   .catch((err) => console.error('MongoDB connection error:', err));
 
+// Schemas
 const userSchema = new mongoose.Schema({
   googleId: String,
   email: String,
@@ -81,6 +87,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// Passport Google Strategy
 passport.use(
   new GoogleStrategy(
     {
@@ -114,13 +121,18 @@ passport.deserializeUser(async (id, done) => {
   }
 });
 
-app.use(cors({ origin: 'http://localhost:3000', credentials: true }));
+// Middleware
+app.use(cors({ 
+    origin: ['http://localhost', 'https://convo-frontend:3000', 'https://convo-frontend.onrender.com'], 
+    credentials: true 
+  }));
 app.use(express.json());
 app.use(
   session({
-    secret: 'your-secret-key',
+    secret: process.env.SESSION_SECRET || 'your-secret-key',
     resave: false,
     saveUninitialized: false,
+    store: MongoStore.create({ mongoUrl: process.env.MONGO_URL })
   })
 );
 app.use(passport.initialize());
@@ -136,6 +148,7 @@ app.get('/api/user/profile-pic/:username', async (req, res) => {
       res.json({ profilePic: null });
     }
   } catch (error) {
+    console.error('Error fetching profile pic:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -143,7 +156,7 @@ app.get('/api/user/profile-pic/:username', async (req, res) => {
 app.post('/api/user/update-profile-pic', upload.single('profilePic'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-    const filePath = `/uploads/${req.file.filename}`;
+    const filePath = `/Uploads/${req.file.filename}`;
     const user = await User.findOneAndUpdate(
       { username: req.body.username },
       { profilePic: filePath },
@@ -152,11 +165,12 @@ app.post('/api/user/update-profile-pic', upload.single('profilePic'), async (req
     if (!user) return res.status(404).json({ message: 'User not found' });
     res.json({ filename: req.file.filename });
   } catch (error) {
+    console.error('Error updating profile pic:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// New endpoint for unread messages
+// Unread messages endpoint
 app.get('/api/messages/unread/:username', async (req, res) => {
   try {
     const username = req.params.username;
@@ -173,7 +187,7 @@ app.get('/api/messages/unread/:username', async (req, res) => {
   }
 });
 
-// New endpoint to mark messages as read
+// Mark messages as read endpoint
 app.post('/api/messages/mark-read/:username/:recipient', async (req, res) => {
   try {
     const { username, recipient } = req.params;
@@ -188,19 +202,19 @@ app.post('/api/messages/mark-read/:username/:recipient', async (req, res) => {
   }
 });
 
-// Existing authentication routes
+// Authentication routes
 app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
 app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: '/' }), (req, res) => {
   if (req.user) {
     const token = jwt.sign({ id: req.user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    res.redirect(`http://localhost:3000/?token=${token}&username=${encodeURIComponent(req.user.username)}`);
+    res.redirect(`https://your-frontend.onrender.com/?token=${token}&username=${encodeURIComponent(req.user.username)}`);
   } else {
-    res.redirect('/');
+    res.redirect(`https://your-frontend.onrender.com`);
   }
 });
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/auth/register', async (req, res) => {
   try {
     const { email, username, password } = req.body;
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
@@ -217,7 +231,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/authenticate', async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
@@ -371,9 +385,7 @@ io.on('connection', (socket) => {
     connectedUsers.set(username, socket.id);
     socket.username = username;
     console.log('User registered:', username, 'with socket:', socket.id);
-    // Emit userStatus to all clients
     io.emit('userStatus', { user: username, status: 'online' });
-    // Update user list
     io.emit('userListUpdate', Array.from(connectedUsers.keys()));
   });
 
@@ -408,7 +420,6 @@ io.on('connection', (socket) => {
         io.to(recipientSocketId).emit('receiveMessage', msg);
         console.log(`Sent message ${msg.messageId} to ${recipient}`);
       }
-      // Also send to sender to update their chat
       io.to(connectedUsers.get(socket.username)).emit('receiveMessage', msg);
     } catch (err) {
       console.error('Error saving message:', err);
@@ -434,7 +445,6 @@ io.on('connection', (socket) => {
       if (sockId === socket.id) {
         connectedUsers.delete(user);
         console.log('User disconnected:', user);
-        // Emit userStatus to all clients
         io.emit('userStatus', { user, status: 'offline' });
         io.emit('userListUpdate', Array.from(connectedUsers.keys()));
         break;
@@ -443,4 +453,4 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(5000, () => console.log('Server running on port 5000'));
+server.listen(process.env.PORT || 5000, () => console.log(`Server running on port ${process.env.PORT || 5000}`));
