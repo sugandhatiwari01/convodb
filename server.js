@@ -21,7 +21,7 @@ const server = http.createServer(app);
 const allowedOrigins = [
   'http://localhost:3000', // For local development
   'https://convo-frontend.vercel.app', // Vercel frontend
-  'https://convo-web.onrender.com', // Existing Render frontend (if still used)
+  'https://convo-frontend.onrender.com', // Existing Render frontend (if still used)
 ];
 
 // Socket.IO configuration
