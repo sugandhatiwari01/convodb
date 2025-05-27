@@ -17,14 +17,17 @@ const app = express();
 const server = http.createServer(app);
 
 // Socket.IO configuration
-// Socket.IO configuration
 const io = socketIo(server, {
   cors: {
-    origin: [
-      'http://localhost:3000',
-      'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
-      /https:\/\/.*\.vercel\.app/,
-    ],
+    origin: (origin, callback) => {
+      console.log(`Socket.IO origin: ${origin}, Path: ${origin ? new URL(origin).pathname : 'N/A'}`);
+      if (!origin || origin === 'http://localhost:3000' || /\.vercel\.app$/.test(origin)) {
+        callback(null, true);
+      } else {
+        console.error(`Socket.IO CORS error: Origin ${origin} not allowed`);
+        callback(new Error(`Not allowed by CORS: ${origin}`));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST'],
   },
@@ -33,12 +36,12 @@ const io = socketIo(server, {
 // MongoDB connection and GridFS setup
 let gridFSBucket;
 mongoose
-  .connect(process.env.MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true })
+  .connect(process.env.MONGO_URL)
   .then(() => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
-    // Create text index without collation
-    User.collection.createIndex({ username: 'text' });
+    // Create index on username field
+    User.collection.createIndex({ username: 'text' }, { collation: { locale: 'en', strength: 2 } });
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
@@ -48,12 +51,13 @@ mongoose
 // Define Mongoose Models
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
-  username: { type: String, required: true, unique: true, index: true },
+  username: { type: String, required: true, unique: true, index: true }, // Add index
   password: { type: String },
   profilePic: { type: String, default: null },
-}, { timestamps: true, collation: { locale: 'en', strength: 2 } });
+}, { timestamps: true, collation: { locale: 'en', strength: 2 } }); // Case-insensitive collation
 
 const User = mongoose.model('User', userSchema);
+
 const messageSchema = new mongoose.Schema({
   sender: { type: String, required: true },
   recipient: { type: String, required: true },
@@ -114,11 +118,15 @@ const upload = multer({ storage });
 // Middleware
 app.use(
   cors({
-    origin: [
-      'http://localhost:3000',
-      'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
-      /https:\/\/.*\.vercel\.app/,
-    ],
+    origin: (origin, callback) => {
+      console.log(`HTTP origin: ${origin}, Path: ${origin ? new URL(origin).pathname : 'N/A'}`);
+      if (!origin || origin === 'http://localhost:3000' || /\.vercel\.app$/.test(origin)) {
+        callback(null, true);
+      } else {
+        console.error(`CORS error: Origin ${origin || 'undefined'} not allowed`);
+        callback(new Error(`Not allowed by CORS: ${origin || 'undefined'}`));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -135,7 +143,7 @@ app.use(
     store: MongoStore.create({
       mongoUrl: process.env.MONGO_URL,
       collectionName: 'sessions',
-      ttl: 24 * 60 * 60,
+      ttl: 24 * 60 * 60, // 1 day
     }),
   })
 );
@@ -153,7 +161,7 @@ const authenticateJWT = (req, res, next) => {
     req.user = decoded;
     next();
   } catch (error) {
-    console.error('JWT error:', error.message);
+    console.error('JWT error:', error.message, error.stack);
     res.status(401).json({ message: 'Invalid token' });
   }
 };
@@ -161,6 +169,9 @@ const authenticateJWT = (req, res, next) => {
 // Socket.IO
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
+  socket.on('error', (err) => {
+    console.error('Socket.IO client error:', err.message, err.stack);
+  });
   socket.on('registerUser', (username) => {
     socket.join(username.toLowerCase());
     socket.user = username;
@@ -205,11 +216,12 @@ app.get(
         process.env.JWT_SECRET,
         { expiresIn: '1h' }
       );
+      console.log('Redirecting to:', `${process.env.FRONTEND_URL}?token=${token}&username=${encodeURIComponent(req.user.username)}`);
       res.redirect(
         `${process.env.FRONTEND_URL}?token=${token}&username=${encodeURIComponent(req.user.username)}`
       );
     } catch (error) {
-      console.error('Google auth callback error:', error.message);
+      console.error('Google auth callback error:', error.message, error.stack);
       res.redirect(
         `${process.env.FRONTEND_URL}?error=${encodeURIComponent('Authentication failed')}`
       );
@@ -246,7 +258,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
-    console.error('Registration error:', error.message);
+    console.error('Registration error:', error.message, error.stack);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -270,7 +282,7 @@ app.post('/api/auth/login', async (req, res) => {
     });
     res.json({ token, username: user.username });
   } catch (error) {
-    console.error('Login error:', error.message);
+    console.error('Login error:', error.message, error.stack);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -282,15 +294,16 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
   }
   try {
     const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '').trim();
+    console.log('Search query:', { query: safeQuery, currentUser });
     const regex = new RegExp(`^${safeQuery}`, 'i');
     const users = await User.find({
       username: { $regex: regex },
       username: { $ne: currentUser.toLowerCase() },
     })
-      .collation({ locale: 'en', strength: 2 })
-      .sort({ username: 1 })
+      .collation({ locale: 'en', strength: 2 }) // Case-insensitive
+      .sort({ username: 1 }) // Sort alphabetically
       .select('username')
-      .limit(50);
+      .limit(50); // Limit results to prevent overload
     const usernames = users.map((user) => user.username);
     res.json(usernames);
   } catch (error) {
@@ -312,28 +325,21 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
     });
     res.json(unreadMessages);
   } catch (error) {
-    console.error('Unread messages error:', error.message);
+    console.error('Unread messages error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to fetch unread messages' });
   }
 });
 
 app.get('/api/user/profile-pic/:username', authenticateJWT, async (req, res) => {
   try {
-    const users = await User.find(
-      {
-        $text: { $search: safeQuery },
-        username: { $ne: currentUser.toLowerCase() },
-      },
-      { score: { $meta: 'textScore' } }
-    )
-      .sort({ score: { $meta: 'textScore' }, username: 1 })
-      .select('username')
-      .limit(50);
-    const usernames = users.map((user) => user.username);
-    res.json(usernames);
+    const user = await User.findOne({ username: req.params.username.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    res.json({ profilePic: user.profilePic || null });
   } catch (error) {
-    console.error('Search users error:', error);
-    res.status(500).json({ message: 'Failed to load contacts' });
+    console.error('Profile pic error:', error.message, error.stack);
+    res.status(500).json({ message: 'Failed to fetch profile pic' });
   }
 });
 
@@ -355,7 +361,7 @@ app.post('/api/user/update-profile-pic', authenticateJWT, upload.single('profile
       res.json({ filename: uploadStream.id.toString() });
     });
   } catch (error) {
-    console.error('Profile pic upload error:', error.message);
+    console.error('Profile pic upload error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to upload profile picture' });
   }
 });
@@ -380,7 +386,7 @@ app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, re
       }))
     );
   } catch (error) {
-    console.error('Fetch messages error:', error.message);
+    console.error('Fetch messages error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to fetch messages' });
   }
 });
@@ -394,7 +400,7 @@ app.post('/api/messages/mark-read/:currentUser/:recipient', authenticateJWT, asy
     );
     res.json({ message: 'Messages marked as read' });
   } catch (error) {
-    console.error('Mark read error:', error.message);
+    console.error('Mark read error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to mark messages as read' });
   }
 });
@@ -423,7 +429,7 @@ app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
       timestamp: message.timestamp,
     });
   } catch (error) {
-    console.error('Text message save error:', error.message);
+    console.error('Text message save error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to send message' });
   }
 });
@@ -458,7 +464,7 @@ app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async
       });
     });
   } catch (error) {
-    console.error('File upload error:', error.message);
+    console.error('File upload error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to send file' });
   }
 });
@@ -472,14 +478,14 @@ app.get('/Uploads/:id', async (req, res) => {
     });
     downloadStream.pipe(res);
   } catch (error) {
-    console.error('File download error:', error.message);
+    console.error('File download error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to retrieve file' });
   }
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err.message);
+  console.error('Error:', err.message, err.stack);
   const status = err.status || 500;
   const message = process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message;
   res.status(status).json({ message });
