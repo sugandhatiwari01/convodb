@@ -20,7 +20,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://convo-frontend.vercel.app',
   'https://convo-frontend.onrender.com',
-  'https://convo-frontend-7plm7t71y-sugandhatiwari01s-projects.vercel.app'
+ 'https://convo-frontend-nwypo4elu-sugandhatiwari01s-projects.vercel.app'
 ];
 
 // Validate environment variables
@@ -35,7 +35,15 @@ requiredEnvVars.forEach((varName) => {
 // Socket.IO configuration
 const io = socketIo(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      console.log(`Socket.IO origin received: ${origin}`);
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.error(`Socket.IO CORS error: Origin ${origin} not allowed`);
+        callback(new Error(`Not allowed by CORS: ${origin}`));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST'],
   },
@@ -124,10 +132,12 @@ const upload = multer({ storage });
 app.use(
   cors({
     origin: (origin, callback) => {
+      console.log(`HTTP origin received: ${origin}`);
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(new Error('Not allowed by CORS'));
+        console.error(`CORS error: Origin ${origin} not allowed`);
+        callback(new Error(`Not allowed by CORS: ${origin}`));
       }
     },
     credentials: true,
@@ -399,7 +409,7 @@ app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async
     uploadStream.write(file.buffer);
     uploadStream.end();
     uploadStream.on('finish', async () => {
-      const message = new Message({
+      const message = new User({
         sender: username.toLowerCase(),
         recipient: recipient.toLowerCase(),
         type: file.mimetype.startsWith('image/') ? 'image' : 'document',
