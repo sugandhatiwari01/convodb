@@ -27,6 +27,7 @@ const allowedOrigins = [
   'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
   'https://convo-frontend-jidfjedja-sugandhatiwari01s-projects.vercel.app',
   'https://convo-frontend-mhxqq9nf0-sugandhatiwari01s-projects.vercel.app',
+'https://convo-frontend-hqoo62n1h-sugandhatiwari01s-projects.vercel.app',
 ];
 
 // Validate environment variables
@@ -86,8 +87,8 @@ const messageSchema = new mongoose.Schema({
   file: { type: String },
   read: { type: Boolean, default: false },
   timestamp: { type: Date, default: Date.now },
+  messageId: { type: String, unique: true }, // Add messageId field
 });
-
 const Message = mongoose.model('Message', messageSchema);
 
 // Passport Configuration
@@ -196,9 +197,19 @@ io.on('connection', (socket) => {
     socket.user = username;
     io.emit('userStatus', { user: username, status: 'online' });
   });
-  socket.on('sendMessage', ({ recipient, message, type, file }) => {
-    const msg = { username: socket.user, message, type, file, messageId: Date.now().toString() };
+  socket.on('sendMessage', ({ recipient, message, type, file, messageId, timestamp, username }) => {
+    const msg = {
+      username,
+      text: message,
+      type,
+      file,
+      messageId,
+      timestamp: new Date(timestamp),
+    };
+    // Emit to recipient's room
     io.to(recipient.toLowerCase()).emit('receiveMessage', msg);
+    // Also emit to sender's room to confirm delivery
+    io.to(username.toLowerCase()).emit('receiveMessage', msg);
   });
   socket.on('typing', ({ recipient, username }) => {
     io.to(recipient.toLowerCase()).emit('userTyping', { username });
@@ -239,7 +250,34 @@ app.get(
     }
   }
 );
-
+app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
+  try {
+    const { sender, recipient, text, timestamp } = req.body;
+    if (!sender || !recipient || !text || !timestamp) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+    const message = new Message({
+      sender: sender.toLowerCase(),
+      recipient: recipient.toLowerCase(),
+      text,
+      type: 'text',
+      timestamp: new Date(timestamp),
+      messageId: new mongoose.Types.ObjectId().toString(), // Generate unique messageId
+    });
+    await message.save();
+    res.json({
+      messageId: message.messageId,
+      sender: message.sender,
+      recipient: message.recipient,
+      text: message.text,
+      type: message.type,
+      timestamp: message.timestamp,
+    });
+  } catch (error) {
+    console.error('Text message save error:', error.message, error.stack);
+    res.status(500).json({ message: 'Failed to send message' });
+  }
+});
 // Routes
 app.post('/api/auth/register', async (req, res) => {
   let { email, username, password } = req.body;
