@@ -22,8 +22,8 @@ const allowedOrigins = [
   'https://convo-frontend.onrender.com',
   'https://convo-frontend-k50po2pip-sugandhatiwari01s-projects.vercel.app',
   'https://convo-frontend-zxiovtysm-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-42pg1b2bm-sugandhatiwari01s-projects.vercel.app'
-];
+'https://convo-frontend-ptsq21yuy-sugandhatiwari01s-projects.vercel.app'
+]
 
 // Validate environment variables
 const requiredEnvVars = ['MONGO_URL', 'JWT_SECRET', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL'];
