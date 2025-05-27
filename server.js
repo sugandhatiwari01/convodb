@@ -21,8 +21,18 @@ const allowedOrigins = [
   'https://convo-frontend.vercel.app',
   'https://convo-frontend.onrender.com',
   'https://convo-frontend-k50po2pip-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-zxiovtysm-sugandhatiwari01s-projects.vercel.app', // Added current frontend domain
+  'https://convo-frontend-zxiovtysm-sugandhatiwari01s-projects.vercel.app',
+  'https://convo-frontend-42pg1b2bm-sugandhatiwari01s-projects.vercel.app' // New origin
 ];
+const cors = require('cors');
+
+// Allow frontend domain
+const corsOptions = {
+  origin: 'https://convo-frontend-42pg1b2bm-sugandhatiwari01s-projects.vercel.app',
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 
 // Socket.IO configuration
 const io = socketIo(server, {
