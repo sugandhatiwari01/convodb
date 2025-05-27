@@ -23,9 +23,10 @@ const allowedOrigins = [
   'https://convo-frontend.onrender.com',
   'https://convo-frontend-7plm7t71y-sugandhatiwari01s-projects.vercel.app',
   'https://convo-frontend-git-main-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-jidfjedja-sugandhatiwari01s-projects.vercel.app',
+  'https://convo-frontend-nwypo4elu-sugandhatiwari01s-projects.vercel.app',
   'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
-  'https://convo.app',
+  'https://convo-frontend-jidfjedja-sugandhatiwari01s-projects.vercel.app',
+  'https://convo-frontend-mhxqq9nf0-sugandhatiwari01s-projects.vercel.app',
 ];
 
 // Validate environment variables
@@ -137,8 +138,8 @@ const upload = multer({ storage });
 app.use(
   cors({
     origin: (origin, callback) => {
-      console.log(`HTTP origin: ${origin}, Method: ${callback}, Path: ${origin ? new URL(origin).pathname : 'N/A'}`);
-      if (allowedOrigins.includes(origin)) {
+      console.log(`HTTP origin: ${origin}, Method: ${callback}, Path: ${origin ? new URL(origin).pathname : 'N/A'}, URL: ${callback}`);
+      if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
         console.error(`CORS error: Origin ${origin || 'undefined'} not allowed`);
@@ -187,6 +188,9 @@ const authenticateJWT = (req, res, next) => {
 // Socket.IO
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
+  socket.on('error', (err) => {
+    console.error('Socket.IO client error:', err.message, err.stack);
+  });
   socket.on('registerUser', (username) => {
     socket.join(username.toLowerCase());
     socket.user = username;
