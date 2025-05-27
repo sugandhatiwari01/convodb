@@ -20,7 +20,8 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://convo-frontend.vercel.app',
   'https://convo-frontend.onrender.com',
-  'https://convo-frontend-k50po2pip-sugandhatiwari01s-projects.vercel.app', // Add this
+  'https://convo-frontend-k50po2pip-sugandhatiwari01s-projects.vercel.app',
+  'https://convo-frontend-zxiovtysm-sugandhatiwari01s-projects.vercel.app', // Added current frontend domain
 ];
 
 // Socket.IO configuration
@@ -42,7 +43,7 @@ mongoose
   })
   .catch((err) => console.error('MongoDB connection error:', err));
 
-// Define Mongoose Models Inline
+// Define Mongoose Models
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   username: { type: String, required: true, unique: true },
@@ -64,7 +65,7 @@ const messageSchema = new mongoose.Schema({
 
 const Message = mongoose.model('Message', messageSchema);
 
-// Passport Configuration Inline
+// Passport Configuration
 passport.serializeUser((user, done) => {
   done(null, user.id);
 });
@@ -147,6 +148,7 @@ const authenticateJWT = (req, res, next) => {
     req.user = decoded;
     next();
   } catch (error) {
+    console.error('JWT error:', error.message, error.stack);
     res.status(401).json({ message: 'Invalid token' });
   }
 };
@@ -206,7 +208,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
-    console.error('Registration error:', error);
+    console.error('Registration error:', error.message, error.stack);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -230,7 +232,7 @@ app.post('/api/auth/login', async (req, res) => {
     });
     res.json({ token, username: user.username });
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('Login error:', error.message, error.stack);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -241,7 +243,10 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     return res.status(400).json({ message: 'currentUser is required' });
   }
   try {
-    const regex = new RegExp(query || '', 'i');
+    // Sanitize query to prevent RegExp errors
+    const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '');
+    console.log('Search query:', { query: safeQuery, currentUser }); // Debug log
+    const regex = new RegExp(safeQuery, 'i');
     const users = await User.find({
       username: { $regex: regex },
       username: { $ne: currentUser.toLowerCase() },
@@ -249,10 +254,11 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     const usernames = users.map((user) => user.username);
     res.json(usernames);
   } catch (error) {
-    console.error('Search users error:', error);
-    res.status(500).json({ message: 'Failed to load contacts' });
+    console.error('Search users error:', error.message, error.stack);
+    res.status(500).json({ message: 'Failed to load contacts', error: error.message });
   }
 });
+
 app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
   try {
     const { username } = req.params;
@@ -266,7 +272,7 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
     });
     res.json(unreadMessages);
   } catch (error) {
-    console.error('Unread messages error:', error);
+    console.error('Unread messages error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to fetch unread messages' });
   }
 });
@@ -279,7 +285,7 @@ app.get('/api/user/profile-pic/:username', authenticateJWT, async (req, res) => 
     }
     res.json({ profilePic: user.profilePic || null });
   } catch (error) {
-    console.error('Profile pic error:', error);
+    console.error('Profile pic error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to fetch profile pic' });
   }
 });
@@ -302,7 +308,7 @@ app.post('/api/user/update-profile-pic', authenticateJWT, upload.single('profile
       res.json({ filename: uploadStream.id.toString() });
     });
   } catch (error) {
-    console.error('Profile pic upload error:', error);
+    console.error('Profile pic upload error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to upload profile picture' });
   }
 });
@@ -327,7 +333,7 @@ app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, re
       }))
     );
   } catch (error) {
-    console.error('Fetch messages error:', error);
+    console.error('Fetch messages error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to fetch messages' });
   }
 });
@@ -341,7 +347,7 @@ app.post('/api/messages/mark-read/:currentUser/:recipient', authenticateJWT, asy
     );
     res.json({ message: 'Messages marked as read' });
   } catch (error) {
-    console.error('Mark read error:', error);
+    console.error('Mark read error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to mark messages as read' });
   }
 });
@@ -375,7 +381,7 @@ app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async
       });
     });
   } catch (error) {
-    console.error('File upload error:', error);
+    console.error('File upload error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to send file' });
   }
 });
@@ -389,7 +395,7 @@ app.get('/Uploads/:id', async (req, res) => {
     });
     downloadStream.pipe(res);
   } catch (error) {
-    console.error('File download error:', error);
+    console.error('File download error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to retrieve file' });
   }
 });
