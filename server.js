@@ -1,6 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors'); // Single import of cors
+const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
@@ -21,10 +21,10 @@ const allowedOrigins = [
   'https://convo-frontend.vercel.app',
   'https://convo-frontend.onrender.com',
   'https://convo-frontend-7plm7t71y-sugandhatiwari01s-projects.vercel.app'
-]
+];
 
 // Validate environment variables
-const requiredEnvVars = ['MONGO_URL', 'JWT_SECRET', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL'];
+const requiredEnvVars = ['MONGO_URL', 'JWT_SECRET', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL', 'FRONTEND_URL'];
 requiredEnvVars.forEach((varName) => {
   if (!process.env[varName]) {
     console.error(`Missing environment variable: ${varName}`);
@@ -44,7 +44,7 @@ const io = socketIo(server, {
 // MongoDB connection and GridFS setup
 let gridFSBucket;
 mongoose
-  .connect(process.env.MONGO_URL) // Removed deprecated options
+  .connect(process.env.MONGO_URL)
   .then(() => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
@@ -189,6 +189,32 @@ io.on('connection', (socket) => {
     }
   });
 });
+
+// Google Auth Routes
+app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
+app.get(
+  '/auth/google/callback',
+  passport.authenticate('google', { session: false }),
+  (req, res) => {
+    try {
+      const token = jwt.sign(
+        { userId: req.user._id, username: req.user.username },
+        process.env.JWT_SECRET,
+        { expiresIn: '1h' }
+      );
+      console.log('Redirecting to:', `${process.env.FRONTEND_URL}?token=${token}&username=${encodeURIComponent(req.user.username)}`);
+      res.redirect(
+        `${process.env.FRONTEND_URL}?token=${token}&username=${encodeURIComponent(req.user.username)}`
+      );
+    } catch (error) {
+      console.error('Google auth callback error:', error.message, error.stack);
+      res.redirect(
+        `${process.env.FRONTEND_URL}?error=${encodeURIComponent('Authentication failed')}`
+      );
+    }
+  }
+);
 
 // Routes
 app.post('/api/auth/register', async (req, res) => {
