@@ -31,24 +31,31 @@ const io = socketIo(server, {
 // MongoDB connection and GridFS setup
 let gridFSBucket;
 mongoose
-  .connect(process.env.MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => {
+  .connect(process.env.MONGO_URL)
+  .then(async () => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
-    User.collection.createIndex({ username: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });
+    // Create text index for search
+    await User.collection.createIndex({ username: 'text' });
+    // Create unique index for username with collation
+    await User.collection.createIndex(
+      { username: 1 },
+      { unique: true, name: 'username_unique', collation: { locale: 'en', strength: 2 } }
+    );
+    console.log('Indexes created successfully');
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
     process.exit(1);
   });
 
-// Define Mongoose Models
+// User Schema
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   username: { type: String, required: true, unique: true },
   password: { type: String },
   profilePic: { type: String, default: null },
-}, { timestamps: true, collation: { locale: 'en', strength: 2 } });
+}, { timestamps: true });
 
 const User = mongoose.model('User', userSchema);
 
@@ -307,30 +314,30 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     return res.status(400).json({ message: 'currentUser is required' });
   }
   try {
-    const safeQuery = (query || '').trim().toLowerCase();
-    let users;
+    const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '').trim();
     if (!safeQuery) {
-      users = await User.find({
+      const users = await User.find({
         username: { $ne: currentUser.toLowerCase() },
       })
+        .collation({ locale: 'en', strength: 2 })
         .sort({ username: 1 })
         .select('username')
         .limit(50);
-    } else {
-      users = await User.find({
-        username: {
-          $ne: currentUser.toLowerCase(),
-          $regex: safeQuery,
-          $options: 'i',
-        },
-      })
-        .sort({ username: 1 })
-        .select('username')
-        .limit(50);
+      return res.json(users.map((user) => user.username));
     }
+    const users = await User.find(
+      {
+        $text: { $search: safeQuery },
+        username: { $ne: currentUser.toLowerCase() },
+      },
+      { score: { $meta: 'textScore' } }
+    )
+      .sort({ score: { $meta: 'textScore' }, username: 1 })
+      .select('username')
+      .limit(50);
     res.json(users.map((user) => user.username));
   } catch (error) {
-    console.error('Search users error:', error.message);
+    console.error('Search users error:', error);
     res.status(500).json({ message: 'Failed to load contacts' });
   }
 });
