@@ -22,7 +22,6 @@ const io = socketIo(server, {
     origin: [
       'http://localhost:3000',
       'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
-      /https:\/\/.*\.vercel\.app/,
     ],
     credentials: true,
     methods: ['GET', 'POST'],
@@ -36,7 +35,7 @@ mongoose
   .then(() => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
-    User.collection.createIndex({ username: 'text' });
+    User.collection.createIndex({ username: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
@@ -46,7 +45,7 @@ mongoose
 // Define Mongoose Models
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
-  username: { type: String, required: true, unique: true, index: true },
+  username: { type: String, required: true, unique: true },
   password: { type: String },
   profilePic: { type: String, default: null },
 }, { timestamps: true, collation: { locale: 'en', strength: 2 } });
@@ -91,9 +90,16 @@ passport.use(
       try {
         let user = await User.findOne({ email: profile.emails[0].value });
         if (!user) {
+          let username = profile.displayName.replace(/\s/g, '').toLowerCase();
+          let baseUsername = username;
+          let counter = 1;
+          while (await User.findOne({ username })) {
+            username = `${baseUsername}${counter}`;
+            counter++;
+          }
           user = new User({
             email: profile.emails[0].value,
-            username: profile.displayName.replace(/\s/g, '').toLowerCase(),
+            username,
             password: null,
           });
           await user.save();
@@ -127,7 +133,6 @@ app.use(
     origin: [
       'http://localhost:3000',
       'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
-      /https:\/\/.*\.vercel\.app/,
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -154,7 +159,7 @@ app.use(passport.session());
 
 // JWT Middleware
 const authenticateJWT = (req, res, next) => {
-  const token = req.cookies.token || req.header('Authorization')?.replace('Bearer ', '');
+  const token = req.header('Authorization')?.replace('Bearer ', '');
   if (!token) {
     return res.status(401).json({ message: 'Authentication required' });
   }
@@ -177,24 +182,28 @@ io.on('connection', (socket) => {
     io.emit('userStatus', { user: username, status: 'online' });
   });
 
-  socket.on('sendMessage', async ({ recipient, message, type, file, messageId, timestamp, username }) => {
+  socket.on('sendMessage', async (data, callback) => {
     try {
-      // Check if message already exists in the database
+      const { recipient, message, type, file, messageId, timestamp, username } = data;
       const existingMessage = await Message.findOne({ messageId });
       if (!existingMessage) {
         const msg = {
+          messageId,
           username,
           text: message,
           type,
           file,
-          messageId,
           timestamp: new Date(timestamp),
         };
         io.to(recipient.toLowerCase()).emit('receiveMessage', msg);
         io.to(username.toLowerCase()).emit('receiveMessage', msg);
+        callback({ status: 'ok' });
+      } else {
+        callback({ status: 'ok' });
       }
     } catch (error) {
       console.error('Socket.IO sendMessage error:', error.message);
+      callback({ status: 'error', message: 'Failed to send message' });
     }
   });
 
@@ -240,7 +249,7 @@ app.get(
 );
 
 // Routes
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/users/register', async (req, res) => {
   let { email, username, password } = req.body;
   username = username.toLowerCase();
   try {
@@ -248,18 +257,18 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ message: 'All fields required' });
     }
     if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) {
-      return res.status(400).json({ message: 'Invalid username' });
+      return res.status(400).json({ message: 'Username must be 3-20 characters (letters, numbers, underscores)' });
     }
     if (!/^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$/.test(email)) {
-      return res.status(400).json({ message: 'Invalid email' });
+      return res.status(400).json({ message: 'Invalid email format' });
     }
     if (password.length < 6) {
-      return res.status(400).json({ message: 'Password too short' });
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
     }
 
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
-      return res.status(400).json({ message: 'Email or username exists' });
+      return res.status(400).json({ message: 'Email or username already exists' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -273,11 +282,11 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/users/login', async (req, res) => {
   const { email, password } = req.body;
   try {
     const user = await User.findOne({ email });
-    if (!user) {
+    if (!user || !user.password) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
     const isMatch = await bcrypt.compare(password, user.password);
@@ -285,11 +294,6 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
     const token = jwt.sign({ userId: user._id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-    });
     res.json({ token, username: user.username });
   } catch (error) {
     console.error('Login error:', error.message);
@@ -303,10 +307,9 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     return res.status(400).json({ message: 'currentUser is required' });
   }
   try {
-    const safeQuery = (query || '').trim();
+    const safeQuery = (query || '').trim().toLowerCase();
     let users;
     if (!safeQuery) {
-      // Return all users except currentUser if no query
       users = await User.find({
         username: { $ne: currentUser.toLowerCase() },
       })
@@ -314,23 +317,20 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
         .select('username')
         .limit(50);
     } else {
-      // Perform text search with partial matching
-      users = await User.find(
-        {
-          $and: [
-            { username: { $ne: currentUser.toLowerCase() } },
-            { $text: { $search: safeQuery } },
-          ],
+      users = await User.find({
+        username: {
+          $ne: currentUser.toLowerCase(),
+          $regex: safeQuery,
+          $options: 'i',
         },
-        { score: { $meta: 'textScore' } }
-      )
-        .sort({ score: { $meta: 'textScore' }, username: 1 })
+      })
+        .sort({ username: 1 })
         .select('username')
         .limit(50);
     }
     res.json(users.map((user) => user.username));
   } catch (error) {
-    console.error('Search users error:', error);
+    console.error('Search users error:', error.message);
     res.status(500).json({ message: 'Failed to load contacts' });
   }
 });
@@ -353,7 +353,7 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
   }
 });
 
-app.get('/api/user/profile-pic/:username', authenticateJWT, async (req, res) => {
+app.get('/api/users/profile-pic/:username', authenticateJWT, async (req, res) => {
   try {
     const user = await User.findOne({ username: req.params.username.toLowerCase() });
     if (!user) {
@@ -366,7 +366,7 @@ app.get('/api/user/profile-pic/:username', authenticateJWT, async (req, res) => 
   }
 });
 
-app.post('/api/user/update-profile-pic', authenticateJWT, upload.single('profilePic'), async (req, res) => {
+app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), async (req, res) => {
   try {
     const { username } = req.body;
     const file = req.file;
@@ -377,6 +377,14 @@ app.post('/api/user/update-profile-pic', authenticateJWT, upload.single('profile
     uploadStream.write(file.buffer);
     uploadStream.end();
     uploadStream.on('finish', async () => {
+      const oldProfilePic = (await User.findOne({ username: username.toLowerCase() })).profilePic;
+      if (oldProfilePic) {
+        try {
+          await gridFSBucket.delete(new mongoose.Types.ObjectId(oldProfilePic));
+        } catch (err) {
+          console.warn('Failed to delete old profile pic:', err.message);
+        }
+      }
       await User.updateOne(
         { username: username.toLowerCase() },
         { profilePic: uploadStream.id.toString() }
@@ -434,13 +442,14 @@ app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
     if (!sender || !recipient || !text || !timestamp) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
+    const messageId = new mongoose.Types.ObjectId().toString();
     const message = new Message({
       sender: sender.toLowerCase(),
       recipient: recipient.toLowerCase(),
       text,
       type: 'text',
       timestamp: new Date(timestamp),
-      messageId: new mongoose.Types.ObjectId().toString(),
+      messageId,
     });
     await message.save();
     res.json({
@@ -457,7 +466,7 @@ app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
   }
 });
 
-app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async (req, res) => {
+app.post('/api/messages/uploadFile', authenticateJWT, upload.single('file'), async (req, res) => {
   try {
     const { recipient, username, timestamp } = req.body;
     const file = req.file;
@@ -468,13 +477,14 @@ app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async
     uploadStream.write(file.buffer);
     uploadStream.end();
     uploadStream.on('finish', async () => {
+      const messageId = new mongoose.Types.ObjectId().toString();
       const message = new Message({
         sender: username.toLowerCase(),
         recipient: recipient.toLowerCase(),
         type: file.mimetype.startsWith('image/') ? 'image' : 'document',
         file: uploadStream.id.toString(),
         timestamp: new Date(timestamp),
-        messageId: new mongoose.Types.ObjectId().toString(),
+        messageId,
       });
       await message.save();
       res.json({
@@ -499,6 +509,15 @@ app.get('/Uploads/:id', async (req, res) => {
     downloadStream.on('error', () => {
       res.status(404).json({ message: 'File not found' });
     });
+    const file = await gridFSBucket.find({ _id: fileId }).next();
+    if (file) {
+      res.set('Content-Type', file.contentType || 'application/octet-stream');
+      if (file.contentType.startsWith('image/')) {
+        res.set('Content-Disposition', 'inline');
+      } else {
+        res.set('Content-Disposition', `attachment; filename="${file.filename}"`);
+      }
+    }
     downloadStream.pipe(res);
   } catch (error) {
     console.error('File download error:', error.message);
