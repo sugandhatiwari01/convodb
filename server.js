@@ -23,7 +23,7 @@ const allowedOrigins = [
   'https://convo-frontend.onrender.com',
   'https://convo-frontend-7plm7t71y-sugandhatiwari01s-projects.vercel.app',
   'https://convo-frontend-git-main-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-nwypo4elu-sugandhatiwari01s-projects.vercel.app',
+  'https://convo-frontend-jidfjedja-sugandhatiwari01s-projects.vercel.app',
   'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
   'https://convo.app',
 ];
