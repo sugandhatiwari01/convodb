@@ -20,7 +20,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://convo-frontend.vercel.app',
   'https://convo-frontend.onrender.com',
- 'https://convo-frontend-nwypo4elu-sugandhatiwari01s-projects.vercel.app'
+ 'https://convo-frontend-jidfjedja-sugandhatiwari01s-projects.vercel.app'
 ];
 
 // Validate environment variables
