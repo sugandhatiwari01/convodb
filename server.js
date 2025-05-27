@@ -1,6 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
+const cors = require('cors'); // Single import of cors
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
@@ -25,6 +25,15 @@ const allowedOrigins = [
   'https://convo-frontend-42pg1b2bm-sugandhatiwari01s-projects.vercel.app'
 ];
 
+// Validate environment variables
+const requiredEnvVars = ['MONGO_URL', 'JWT_SECRET', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL'];
+requiredEnvVars.forEach((varName) => {
+  if (!process.env[varName]) {
+    console.error(`Missing environment variable: ${varName}`);
+    process.exit(1);
+  }
+});
+
 // Socket.IO configuration
 const io = socketIo(server, {
   cors: {
@@ -37,12 +46,15 @@ const io = socketIo(server, {
 // MongoDB connection and GridFS setup
 let gridFSBucket;
 mongoose
-  .connect(process.env.MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true })
+  .connect(process.env.MONGO_URL) // Removed deprecated options
   .then(() => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
   })
-  .catch((err) => console.error('MongoDB connection error:', err));
+  .catch((err) => {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+  });
 
 // Define Mongoose Models
 const userSchema = new mongoose.Schema({
@@ -398,6 +410,14 @@ app.get('/Uploads/:id', async (req, res) => {
     console.error('File download error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to retrieve file' });
   }
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Error:', err.message, err.stack);
+  const status = err.status || 500;
+  const message = process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message;
+  res.status(status).json({ message });
 });
 
 const PORT = process.env.PORT || 5000;
