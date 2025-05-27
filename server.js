@@ -17,6 +17,7 @@ const app = express();
 const server = http.createServer(app);
 
 // Socket.IO configuration
+// Socket.IO configuration
 const io = socketIo(server, {
   cors: {
     origin: [
@@ -36,7 +37,8 @@ mongoose
   .then(() => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
-    User.collection.createIndex({ username: 'text' }, { collation: { locale: 'en', strength: 2 } });
+    // Create text index without collation
+    User.collection.createIndex({ username: 'text' });
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
@@ -52,7 +54,6 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true, collation: { locale: 'en', strength: 2 } });
 
 const User = mongoose.model('User', userSchema);
-
 const messageSchema = new mongoose.Schema({
   sender: { type: String, required: true },
   recipient: { type: String, required: true },
@@ -281,18 +282,17 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
   }
   try {
     const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '').trim();
-    const regex = new RegExp(`^${safeQuery}`, 'i');
-    const users = await User.find({
-      username: { $regex: regex },
-      username: { $ne: currentUser.toLowerCase() },
-    })
-      .collation({ locale: 'en', strength: 2 })
+if (!safeQuery) {
+      // Return all users except currentUser if no query
+      const users = await User.find({
+        username: { $ne: currentUser.toLowerCase() },
+      })
       .sort({ username: 1 })
       .select('username')
       .limit(50);
-    const usernames = users.map((user) => user.username);
-    res.json(usernames);
-  } catch (error) {
+return res.json(users.map((user) => user.username));
+  } }
+  catch (error) {
     console.error('Search users error:', error);
     res.status(500).json({ message: 'Failed to load contacts' });
   }
@@ -318,14 +318,21 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
 
 app.get('/api/user/profile-pic/:username', authenticateJWT, async (req, res) => {
   try {
-    const user = await User.findOne({ username: req.params.username.toLowerCase() });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    res.json({ profilePic: user.profilePic || null });
+    const users = await User.find(
+      {
+        $text: { $search: safeQuery },
+        username: { $ne: currentUser.toLowerCase() },
+      },
+      { score: { $meta: 'textScore' } }
+    )
+      .sort({ score: { $meta: 'textScore' }, username: 1 })
+      .select('username')
+      .limit(50);
+    const usernames = users.map((user) => user.username);
+    res.json(usernames);
   } catch (error) {
-    console.error('Profile pic error:', error.message);
-    res.status(500).json({ message: 'Failed to fetch profile pic' });
+    console.error('Search users error:', error);
+    res.status(500).json({ message: 'Failed to load contacts' });
   }
 });
 
