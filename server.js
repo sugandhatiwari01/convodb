@@ -17,7 +17,6 @@ const app = express();
 const server = http.createServer(app);
 
 // Socket.IO configuration
-// Socket.IO configuration
 const io = socketIo(server, {
   cors: {
     origin: [
@@ -37,7 +36,6 @@ mongoose
   .then(() => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
-    // Create text index without collation
     User.collection.createIndex({ username: 'text' });
   })
   .catch((err) => {
@@ -54,6 +52,7 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true, collation: { locale: 'en', strength: 2 } });
 
 const User = mongoose.model('User', userSchema);
+
 const messageSchema = new mongoose.Schema({
   sender: { type: String, required: true },
   recipient: { type: String, required: true },
@@ -109,7 +108,18 @@ passport.use(
 
 // Multer for file uploads
 const storage = multer.memoryStorage();
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG, PNG, and PDF files are allowed'), false);
+    }
+  },
+});
 
 // Middleware
 app.use(
@@ -166,24 +176,36 @@ io.on('connection', (socket) => {
     socket.user = username;
     io.emit('userStatus', { user: username, status: 'online' });
   });
-  socket.on('sendMessage', ({ recipient, message, type, file, messageId, timestamp, username }) => {
-    const msg = {
-      username,
-      text: message,
-      type,
-      file,
-      messageId,
-      timestamp: new Date(timestamp),
-    };
-    io.to(recipient.toLowerCase()).emit('receiveMessage', msg);
-    io.to(username.toLowerCase()).emit('receiveMessage', msg);
+
+  socket.on('sendMessage', async ({ recipient, message, type, file, messageId, timestamp, username }) => {
+    try {
+      // Check if message already exists in the database
+      const existingMessage = await Message.findOne({ messageId });
+      if (!existingMessage) {
+        const msg = {
+          username,
+          text: message,
+          type,
+          file,
+          messageId,
+          timestamp: new Date(timestamp),
+        };
+        io.to(recipient.toLowerCase()).emit('receiveMessage', msg);
+        io.to(username.toLowerCase()).emit('receiveMessage', msg);
+      }
+    } catch (error) {
+      console.error('Socket.IO sendMessage error:', error.message);
+    }
   });
+
   socket.on('typing', ({ recipient, username }) => {
     io.to(recipient.toLowerCase()).emit('userTyping', { username });
   });
+
   socket.on('stopTyping', ({ recipient }) => {
     io.to(recipient.toLowerCase()).emit('userTyping', {});
   });
+
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
     if (socket.user) {
@@ -281,18 +303,33 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     return res.status(400).json({ message: 'currentUser is required' });
   }
   try {
-    const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '').trim();
-if (!safeQuery) {
+    const safeQuery = (query || '').trim();
+    let users;
+    if (!safeQuery) {
       // Return all users except currentUser if no query
-      const users = await User.find({
+      users = await User.find({
         username: { $ne: currentUser.toLowerCase() },
       })
-      .sort({ username: 1 })
-      .select('username')
-      .limit(50);
-return res.json(users.map((user) => user.username));
-  } }
-  catch (error) {
+        .sort({ username: 1 })
+        .select('username')
+        .limit(50);
+    } else {
+      // Perform text search with partial matching
+      users = await User.find(
+        {
+          $and: [
+            { username: { $ne: currentUser.toLowerCase() } },
+            { $text: { $search: safeQuery } },
+          ],
+        },
+        { score: { $meta: 'textScore' } }
+      )
+        .sort({ score: { $meta: 'textScore' }, username: 1 })
+        .select('username')
+        .limit(50);
+    }
+    res.json(users.map((user) => user.username));
+  } catch (error) {
     console.error('Search users error:', error);
     res.status(500).json({ message: 'Failed to load contacts' });
   }
@@ -318,21 +355,14 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
 
 app.get('/api/user/profile-pic/:username', authenticateJWT, async (req, res) => {
   try {
-    const users = await User.find(
-      {
-        $text: { $search: safeQuery },
-        username: { $ne: currentUser.toLowerCase() },
-      },
-      { score: { $meta: 'textScore' } }
-    )
-      .sort({ score: { $meta: 'textScore' }, username: 1 })
-      .select('username')
-      .limit(50);
-    const usernames = users.map((user) => user.username);
-    res.json(usernames);
+    const user = await User.findOne({ username: req.params.username.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    res.json({ profilePic: user.profilePic || null });
   } catch (error) {
-    console.error('Search users error:', error);
-    res.status(500).json({ message: 'Failed to load contacts' });
+    console.error('Profile pic error:', error.message);
+    res.status(500).json({ message: 'Failed to fetch profile pic' });
   }
 });
 
@@ -370,7 +400,7 @@ app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, re
     }).sort({ timestamp: 1 });
     res.json(
       messages.map((msg) => ({
-        messageId: msg._id.toString(),
+        messageId: msg.messageId,
         sender: msg.sender,
         text: msg.text,
         timestamp: msg.timestamp,
@@ -448,7 +478,7 @@ app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async
       });
       await message.save();
       res.json({
-        messageId: message._id.toString(),
+        messageId: message.messageId,
         sender: username,
         recipient,
         type: message.type,
