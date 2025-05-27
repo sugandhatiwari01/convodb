@@ -282,17 +282,18 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
   }
   try {
     const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '').trim();
-if (!safeQuery) {
-      // Return all users except currentUser if no query
-      const users = await User.find({
-        username: { $ne: currentUser.toLowerCase() },
-      })
+    const regex = new RegExp(`^${safeQuery}`, 'i');
+    const users = await User.find({
+      username: { $regex: regex },
+      username: { $ne: currentUser.toLowerCase() },
+    })
+      .collation({ locale: 'en', strength: 2 })
       .sort({ username: 1 })
       .select('username')
       .limit(50);
-return res.json(users.map((user) => user.username));
-  } }
-  catch (error) {
+    const usernames = users.map((user) => user.username);
+    res.json(usernames);
+  } catch (error) {
     console.error('Search users error:', error);
     res.status(500).json({ message: 'Failed to load contacts' });
   }
