@@ -8,11 +8,9 @@ const multer = require('multer');
 const { GridFSBucket } = require('mongodb');
 const session = require('express-session');
 const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const socketIo = require('socket.io');
 const http = require('http');
-const User = require('./models/User');
-const Message = require('./models/Message');
-require('./config/passport');
 
 const app = express();
 const server = http.createServer(app);
@@ -42,6 +40,103 @@ mongoose
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
   })
   .catch((err) => console.error('MongoDB connection error:', err));
+
+// Define Mongoose Models Inline
+// User Model
+const userSchema = new mongoose.Schema({
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+  },
+  username: {
+    type: String,
+    required: true,
+    unique: true,
+  },
+  password: {
+    type: String,
+  },
+  profilePic: {
+    type: String, // Stores the GridFS file ID for the profile picture
+    default: null,
+  },
+}, { timestamps: true });
+
+const User = mongoose.model('User', userSchema);
+
+// Message Model
+const messageSchema = new mongoose.Schema({
+  sender: {
+    type: String,
+    required: true,
+  },
+  recipient: {
+    type: String,
+    required: true,
+  },
+  text: {
+    type: String,
+  },
+  type: {
+    type: String,
+    enum: ['text', 'image', 'document'],
+    default: 'text',
+  },
+  file: {
+    type: String, // Stores the GridFS file ID
+  },
+  read: {
+    type: Boolean,
+    default: false,
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+const Message = mongoose.model('Message', messageSchema);
+
+// Passport Configuration Inline
+passport.serializeUser((user, done) => {
+  done(null, user.id);
+});
+
+passport.deserializeUser(async (id, done) => {
+  try {
+    const user = await User.findById(id);
+    done(null, user);
+  } catch (err) {
+    done(err, null);
+  }
+});
+
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: process.env.GOOGLE_CALLBACK_URL,
+    },
+    async (accessToken, refreshToken, profile, done) => {
+      try {
+        let user = await User.findOne({ email: profile.emails[0].value });
+        if (!user) {
+          user = new User({
+            email: profile.emails[0].value,
+            username: profile.displayName.replace(/\s/g, '').toLowerCase(),
+            password: null, // Google users don't need a password
+          });
+          await user.save();
+        }
+        done(null, user);
+      } catch (err) {
+        done(err, null);
+      }
+    }
+  )
+);
 
 // Multer for file uploads
 const storage = multer.memoryStorage();
@@ -159,7 +254,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return status(400).json({ message: 'Invalid credentials' });
+      return res.status(400).json({ message: 'Invalid credentials' });
     }
     const token = jwt.sign({ userId: user._id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.cookie('token', token, {
@@ -182,8 +277,8 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
   try {
     const regex = new RegExp(query || '', 'i');
     const users = await User.find({
-      username: { regex: $regex },
-    username: { $ne: currentUser.toLowerCase() },
+      username: { $regex: regex },
+      username: { $ne: currentUser.toLowerCase() },
     }).select('username');
     const usernames = users.map((user) => user.username);
     res.json(usernames);
@@ -202,7 +297,7 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
     ]);
     const unreadMessages = {};
     unreadCounts.forEach(({ _id, count }) => {
-      unreadMessages[_id] = count;
+      unread.Messages[_id] = count;
     });
     res.json(unreadMessages);
   } catch (error) {
