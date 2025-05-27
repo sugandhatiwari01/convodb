@@ -17,7 +17,6 @@ const app = express();
 const server = http.createServer(app);
 
 // Socket.IO configuration
-// Socket.IO configuration
 const io = socketIo(server, {
   cors: {
     origin: [
@@ -37,8 +36,7 @@ mongoose
   .then(() => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
-    // Create text index without collation
-    User.collection.createIndex({ username: 'text' });
+    User.collection.createIndex({ username: 'text' }, { collation: { locale: 'en', strength: 2 } });
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
@@ -54,6 +52,7 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true, collation: { locale: 'en', strength: 2 } });
 
 const User = mongoose.model('User', userSchema);
+
 const messageSchema = new mongoose.Schema({
   sender: { type: String, required: true },
   recipient: { type: String, required: true },
@@ -297,7 +296,7 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     console.error('Search users error:', error);
     res.status(500).json({ message: 'Failed to load contacts' });
   }
-});y
+});
 
 app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
   try {
@@ -319,21 +318,14 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
 
 app.get('/api/user/profile-pic/:username', authenticateJWT, async (req, res) => {
   try {
-    const users = await User.find(
-      {
-        $text: { $search: safeQuery },
-        username: { $ne: currentUser.toLowerCase() },
-      },
-      { score: { $meta: 'textScore' } }
-    )
-      .sort({ score: { $meta: 'textScore' }, username: 1 })
-      .select('username')
-      .limit(50);
-    const usernames = users.map((user) => user.username);
-    res.json(usernames);
+    const user = await User.findOne({ username: req.params.username.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    res.json({ profilePic: user.profilePic || null });
   } catch (error) {
-    console.error('Search users error:', error);
-    res.status(500).json({ message: 'Failed to load contacts' });
+    console.error('Profile pic error:', error.message);
+    res.status(500).json({ message: 'Failed to fetch profile pic' });
   }
 });
 
