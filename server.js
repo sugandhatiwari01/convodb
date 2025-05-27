@@ -1,6 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
+const cors = require('cors'); // Single import of cors
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
@@ -20,11 +20,11 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://convo-frontend.vercel.app',
   'https://convo-frontend.onrender.com',
-  'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app'
-];
+  'https://convo-frontend-7plm7t71y-sugandhatiwari01s-projects.vercel.app'
+]
 
 // Validate environment variables
-const requiredEnvVars = ['MONGO_URL', 'JWT_SECRET', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL', 'FRONTEND_URL'];
+const requiredEnvVars = ['MONGO_URL', 'JWT_SECRET', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL'];
 requiredEnvVars.forEach((varName) => {
   if (!process.env[varName]) {
     console.error(`Missing environment variable: ${varName}`);
@@ -44,7 +44,7 @@ const io = socketIo(server, {
 // MongoDB connection and GridFS setup
 let gridFSBucket;
 mongoose
-  .connect(process.env.MONGO_URL)
+  .connect(process.env.MONGO_URL) // Removed deprecated options
   .then(() => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
@@ -127,7 +127,6 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.error(`CORS blocked for origin: ${origin}`);
         callback(new Error('Not allowed by CORS'));
       }
     },
@@ -144,11 +143,6 @@ app.use(
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    }
   })
 );
 app.use(passport.initialize());
@@ -174,7 +168,6 @@ const authenticateJWT = (req, res, next) => {
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
   socket.on('registerUser', (username) => {
-    console.log('User registered:', username);
     socket.join(username.toLowerCase());
     socket.user = username;
     io.emit('userStatus', { user: username, status: 'online' });
@@ -206,10 +199,10 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ message: 'All fields required' });
     }
     if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) {
-      return res.status(400).json({ message: 'Invalid username format' });
+      return res.status(400).json({ message: 'Invalid username' });
     }
     if (!/^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$/.test(email)) {
-      return res.status(400).json({ message: 'Invalid email format' });
+      return res.status(400).json({ message: 'Invalid email' });
     }
     if (password.length < 6) {
       return res.status(400).json({ message: 'Password too short' });
@@ -217,7 +210,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
-      return res.status(400).json({ message: 'Email or username already exists' });
+      return res.status(400).json({ message: 'Email or username exists' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -227,7 +220,7 @@ app.post('/api/auth/register', async (req, res) => {
     res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
     console.error('Registration error:', error.message, error.stack);
-    res.status(500).json({ message: 'Failed to register user' });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -236,45 +229,43 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+      return res.status(400).json({ message: 'Invalid credentials' });
     }
-    if (user.password) {
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) {
-        return res.status(401).json({ message: 'Invalid credentials' });
-      }
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials' });
     }
     const token = jwt.sign({ userId: user._id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'none',
-      maxAge: 60 * 60 * 1000 // 1 hour
+      sameSite: 'strict',
     });
     res.json({ token, username: user.username });
   } catch (error) {
     console.error('Login error:', error.message, error.stack);
-    res.status(500).json({ message: 'Failed to login' });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
 app.get('/api/users/search', authenticateJWT, async (req, res) => {
   const { query, currentUser } = req.query;
   if (!currentUser) {
-    return res.status(400).json({ message: 'Current user is required' });
+    return res.status(400).json({ message: 'currentUser is required' });
   }
   try {
     const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '');
-    console.log('Searching users:', { query, safeQuery, currentUser });
+    console.log('Search query:', { query: safeQuery, currentUser });
     const regex = new RegExp(safeQuery, 'i');
     const users = await User.find({
       username: { $regex: regex },
       username: { $ne: currentUser.toLowerCase() },
     }).select('username');
-    res.json(users.map((user) => user.username));
+    const usernames = users.map((user) => user.username);
+    res.json(usernames);
   } catch (error) {
     console.error('Search users error:', error.message, error.stack);
-    res.status(500).json({ message: 'Failed to load contacts' });
+    res.status(500).json({ message: 'Failed to load contacts', error: error.message });
   }
 });
 
@@ -291,7 +282,7 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
     });
     res.json(unreadMessages);
   } catch (error) {
-    console.error('Unread messages fetch error:', error.message, error.stack);
+    console.error('Unread messages error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to fetch unread messages' });
   }
 });
@@ -304,8 +295,8 @@ app.get('/api/user/profile-pic/:username', authenticateJWT, async (req, res) => 
     }
     res.json({ profilePic: user.profilePic || null });
   } catch (error) {
-    console.error('Profile picture fetch error:', error.message, error.stack);
-    res.status(500).json({ message: 'Failed to fetch profile picture' });
+    console.error('Profile pic error:', error.message, error.stack);
+    res.status(500).json({ message: 'Failed to fetch profile pic' });
   }
 });
 
@@ -314,7 +305,7 @@ app.post('/api/user/update-profile-pic', authenticateJWT, upload.single('profile
     const { username } = req.body;
     const file = req.file;
     if (!file || !username) {
-      return res.status(400).json({ message: 'File and username required' });
+      return res.status(400).json({ message: 'File and username are required' });
     }
     const uploadStream = gridFSBucket.openUploadStream(file.originalname);
     uploadStream.write(file.buffer);
@@ -327,7 +318,7 @@ app.post('/api/user/update-profile-pic', authenticateJWT, upload.single('profile
       res.json({ filename: uploadStream.id.toString() });
     });
   } catch (error) {
-    console.error('Profile picture upload error:', error.message, error.stack);
+    console.error('Profile pic upload error:', error.message, error.stack);
     res.status(500).json({ message: 'Failed to upload profile picture' });
   }
 });
@@ -352,8 +343,8 @@ app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, re
       }))
     );
   } catch (error) {
-    console.error('Message fetch error:', error.message, error.stack);
-    res.status(500).json({ message: 'Failed to retrieve messages' });
+    console.error('Fetch messages error:', error.message, error.stack);
+    res.status(500).json({ message: 'Failed to fetch messages' });
   }
 });
 
@@ -419,52 +410,9 @@ app.get('/Uploads/:id', async (req, res) => {
   }
 });
 
-// Google OAuth Routes
-app.get('/auth/google', (req, res, next) => {
-  console.log('Hit /auth/google:', req.originalUrl);
-  passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
-});
-
-app.get(
-  '/auth/google/callback',
-  passport.authenticate('google', {
-    failureRedirect: `${process.env.FRONTEND_URL}?error=auth_failed`,
-  }),
-  async (req, res) => {
-    try {
-      console.log('Google callback for user:', req.user.username, req.originalUrl);
-      const token = jwt.sign(
-        { userId: req.user._id, username: req.user.username },
-        process.env.JWT_SECRET,
-        { expiresIn: '1h' }
-      );
-      res.cookie('token', token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: 60 * 60 * 1000 // 1 hour
-      });
-      const redirectUrl = `${
-        process.env.FRONTEND_URL
-      }?token=${token}&username=${encodeURIComponent(req.user.username)}`;
-      console.log('Redirecting to:', redirectUrl);
-      res.redirect(redirectUrl);
-    } catch (error) {
-      console.error('Google callback error:', error.message, error.stack);
-      res.redirect(`${process.env.FRONTEND_URL}?error=server_error`);
-    }
-  }
-);
-
-// Catch invalid auth routes
-app.get('/auth/*', (req, res) => {
-  console.error(`Invalid auth route accessed: ${req.path}`);
-  res.status(404).json({ message: 'Invalid authentication route' });
-});
-
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Server error:', err.message, err.stack);
+  console.error('Error:', err.message, err.stack);
   const status = err.status || 500;
   const message = process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message;
   res.status(status).json({ message });
