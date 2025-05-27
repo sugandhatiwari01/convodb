@@ -16,35 +16,13 @@ const http = require('http');
 const app = express();
 const server = http.createServer(app);
 
-// Define allowed origins for CORS
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://convo-frontend.vercel.app',
-  'https://convo-frontend.onrender.com',
-  'https://convo-frontend-7plm7t71y-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-git-main-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-nwypo4elu-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-jidfjedja-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-mhxqq9nf0-sugandhatiwari01s-projects.vercel.app',
-'https://convo-frontend-hqoo62n1h-sugandhatiwari01s-projects.vercel.app',
-];
-
-// Validate environment variables
-const requiredEnvVars = ['MONGO_URL', 'JWT_SECRET', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL', 'FRONTEND_URL'];
-requiredEnvVars.forEach((varName) => {
-  if (!process.env[varName]) {
-    console.error(`Missing environment variable: ${varName}`);
-    process.exit(1);
-  }
-});
-
 // Socket.IO configuration
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
       console.log(`Socket.IO origin: ${origin}, Path: ${origin ? new URL(origin).pathname : 'N/A'}`);
-      if (!origin || allowedOrigins.includes(origin)) {
+      // Allow localhost and all *.vercel.app domains
+      if (!origin || origin === 'http://localhost:3000' || /\.vercel\.app$/.test(origin)) {
         callback(null, true);
       } else {
         console.error(`Socket.IO CORS error: Origin ${origin} not allowed`);
@@ -87,8 +65,9 @@ const messageSchema = new mongoose.Schema({
   file: { type: String },
   read: { type: Boolean, default: false },
   timestamp: { type: Date, default: Date.now },
-  messageId: { type: String, unique: true }, // Add messageId field
+  messageId: { type: String, unique: true }, // Added for unique message IDs
 });
+
 const Message = mongoose.model('Message', messageSchema);
 
 // Passport Configuration
@@ -139,8 +118,9 @@ const upload = multer({ storage });
 app.use(
   cors({
     origin: (origin, callback) => {
-      console.log(`HTTP origin: ${origin}, Method: ${callback}, Path: ${origin ? new URL(origin).pathname : 'N/A'}, URL: ${callback}`);
-      if (!origin || allowedOrigins.includes(origin)) {
+      console.log(`HTTP origin: ${origin}, Path: ${origin ? new URL(origin).pathname : 'N/A'}`);
+      // Allow localhost and all *.vercel.app domains
+      if (!origin || origin === 'http://localhost:3000' || /\.vercel\.app$/.test(origin)) {
         callback(null, true);
       } else {
         console.error(`CORS error: Origin ${origin || 'undefined'} not allowed`);
@@ -206,9 +186,7 @@ io.on('connection', (socket) => {
       messageId,
       timestamp: new Date(timestamp),
     };
-    // Emit to recipient's room
     io.to(recipient.toLowerCase()).emit('receiveMessage', msg);
-    // Also emit to sender's room to confirm delivery
     io.to(username.toLowerCase()).emit('receiveMessage', msg);
   });
   socket.on('typing', ({ recipient, username }) => {
@@ -238,7 +216,7 @@ app.get(
         process.env.JWT_SECRET,
         { expiresIn: '1h' }
       );
-      console.log('Redirecting to:', `${process.env.FRONTEND_URL}?token=${token}&username=${encodeURIComponent(req.user.username)}`);
+      console.log('Redirecting to:', `${process.env.FR -ONTEND_URL}?token=${token}&username=${encodeURIComponent(req.user.username)}`);
       res.redirect(
         `${process.env.FRONTEND_URL}?token=${token}&username=${encodeURIComponent(req.user.username)}`
       );
@@ -250,34 +228,7 @@ app.get(
     }
   }
 );
-app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
-  try {
-    const { sender, recipient, text, timestamp } = req.body;
-    if (!sender || !recipient || !text || !timestamp) {
-      return res.status(400).json({ message: 'Missing required fields' });
-    }
-    const message = new Message({
-      sender: sender.toLowerCase(),
-      recipient: recipient.toLowerCase(),
-      text,
-      type: 'text',
-      timestamp: new Date(timestamp),
-      messageId: new mongoose.Types.ObjectId().toString(), // Generate unique messageId
-    });
-    await message.save();
-    res.json({
-      messageId: message.messageId,
-      sender: message.sender,
-      recipient: message.recipient,
-      text: message.text,
-      type: message.type,
-      timestamp: message.timestamp,
-    });
-  } catch (error) {
-    console.error('Text message save error:', error.message, error.stack);
-    res.status(500).json({ message: 'Failed to send message' });
-  }
-});
+
 // Routes
 app.post('/api/auth/register', async (req, res) => {
   let { email, username, password } = req.body;
@@ -342,7 +293,7 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     return res.status(400).json({ message: 'currentUser is required' });
   }
   try {
-    const safeQuery = (query || '').replace(/[^a-zA-Z0-Z0-9_]/g, '');
+    const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '');
     console.log('Search query:', { query: safeQuery, currentUser });
     const regex = new RegExp(`^${safeQuery}`, 'i');
     const users = await User.find({
@@ -450,6 +401,35 @@ app.post('/api/messages/mark-read/:currentUser/:recipient', authenticateJWT, asy
   }
 });
 
+app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
+  try {
+    const { sender, recipient, text, timestamp } = req.body;
+    if (!sender || !recipient || !text || !timestamp) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+    const message = new Message({
+      sender: sender.toLowerCase(),
+      recipient: recipient.toLowerCase(),
+      text,
+      type: 'text',
+      timestamp: new Date(timestamp),
+      messageId: new mongoose.Types.ObjectId().toString(),
+    });
+    await message.save();
+    res.json({
+      messageId: message.messageId,
+      sender: message.sender,
+      recipient: message.recipient,
+      text: message.text,
+      type: message.type,
+      timestamp: message.timestamp,
+    });
+  } catch (error) {
+    console.error('Text message save error:', error.message, error.stack);
+    res.status(500).json({ message: 'Failed to send message' });
+  }
+});
+
 app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async (req, res) => {
   try {
     const { recipient, username, timestamp } = req.body;
@@ -467,6 +447,7 @@ app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async
         type: file.mimetype.startsWith('image/') ? 'image' : 'document',
         file: uploadStream.id.toString(),
         timestamp: new Date(timestamp),
+        messageId: new mongoose.Types.ObjectId().toString(),
       });
       await message.save();
       res.json({
