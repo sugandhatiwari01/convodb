@@ -22,17 +22,8 @@ const allowedOrigins = [
   'https://convo-frontend.onrender.com',
   'https://convo-frontend-k50po2pip-sugandhatiwari01s-projects.vercel.app',
   'https://convo-frontend-zxiovtysm-sugandhatiwari01s-projects.vercel.app',
-  'https://convo-frontend-42pg1b2bm-sugandhatiwari01s-projects.vercel.app' // New origin
+  'https://convo-frontend-42pg1b2bm-sugandhatiwari01s-projects.vercel.app'
 ];
-const cors = require('cors');
-
-// Allow frontend domain
-const corsOptions = {
-  origin: 'https://convo-frontend-42pg1b2bm-sugandhatiwari01s-projects.vercel.app',
-  credentials: true,
-};
-
-app.use(cors(corsOptions));
 
 // Socket.IO configuration
 const io = socketIo(server, {
@@ -253,9 +244,8 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     return res.status(400).json({ message: 'currentUser is required' });
   }
   try {
-    // Sanitize query to prevent RegExp errors
     const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '');
-    console.log('Search query:', { query: safeQuery, currentUser }); // Debug log
+    console.log('Search query:', { query: safeQuery, currentUser });
     const regex = new RegExp(safeQuery, 'i');
     const users = await User.find({
       username: { $regex: regex },
@@ -412,13 +402,3 @@ app.get('/Uploads/:id', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-
-
-
-
-
-
-
-
-
