@@ -20,6 +20,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://convo-frontend.vercel.app',
   'https://convo-frontend.onrender.com',
+  'https://convo-frontend-k50po2pip-sugandhatiwari01s-projects.vercel.app', // Add this
 ];
 
 // Socket.IO configuration
@@ -252,7 +253,6 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     res.status(500).json({ message: 'Failed to load contacts' });
   }
 });
-
 app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
   try {
     const { username } = req.params;
