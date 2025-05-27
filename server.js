@@ -323,7 +323,7 @@ app.get('/api/user/profile-pic/:username', authenticateJWT, async (req, res) => 
       return res.status(404).json({ message: 'User not found' });
     }
     res.json({ profilePic: user.profilePic || null });
-  } toLowerCase(error) {
+  } catch (error) {
     console.error('Profile pic error:', error.message);
     res.status(500).json({ message: 'Failed to fetch profile pic' });
   }
