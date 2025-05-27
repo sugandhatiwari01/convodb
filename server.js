@@ -17,9 +17,9 @@ const server = http.createServer(app);
 
 // Define allowed origins for CORS
 const allowedOrigins = [
-  'http://localhost:3000', // For local development
-  'https://convo-frontend.vercel.app', // Vercel frontend
-  'https://convo-frontend.onrender.com', // Existing Render frontend (if still used)
+  'http://localhost:3000',
+  'https://convo-frontend.vercel.app',
+  'https://convo-frontend.onrender.com',
 ];
 
 // Socket.IO configuration
@@ -42,58 +42,23 @@ mongoose
   .catch((err) => console.error('MongoDB connection error:', err));
 
 // Define Mongoose Models Inline
-// User Model
 const userSchema = new mongoose.Schema({
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-  },
-  username: {
-    type: String,
-    required: true,
-    unique: true,
-  },
-  password: {
-    type: String,
-  },
-  profilePic: {
-    type: String, // Stores the GridFS file ID for the profile picture
-    default: null,
-  },
+  email: { type: String, required: true, unique: true },
+  username: { type: String, required: true, unique: true },
+  password: { type: String },
+  profilePic: { type: String, default: null },
 }, { timestamps: true });
 
 const User = mongoose.model('User', userSchema);
 
-// Message Model
 const messageSchema = new mongoose.Schema({
-  sender: {
-    type: String,
-    required: true,
-  },
-  recipient: {
-    type: String,
-    required: true,
-  },
-  text: {
-    type: String,
-  },
-  type: {
-    type: String,
-    enum: ['text', 'image', 'document'],
-    default: 'text',
-  },
-  file: {
-    type: String, // Stores the GridFS file ID
-  },
-  read: {
-    type: Boolean,
-    default: false,
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now,
-  },
+  sender: { type: String, required: true },
+  recipient: { type: String, required: true },
+  text: { type: String },
+  type: { type: String, enum: ['text', 'image', 'document'], default: 'text' },
+  file: { type: String },
+  read: { type: Boolean, default: false },
+  timestamp: { type: Date, default: Date.now },
 });
 
 const Message = mongoose.model('Message', messageSchema);
@@ -126,7 +91,7 @@ passport.use(
           user = new User({
             email: profile.emails[0].value,
             username: profile.displayName.replace(/\s/g, '').toLowerCase(),
-            password: null, // Google users don't need a password
+            password: null,
           });
           await user.save();
         }
@@ -190,7 +155,7 @@ io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
   socket.on('registerUser', (username) => {
     socket.join(username.toLowerCase());
-    socket.user = username; // Store username for message sending
+    socket.user = username;
     io.emit('userStatus', { user: username, status: 'online' });
   });
   socket.on('sendMessage', ({ recipient, message, type, file }) => {
@@ -297,7 +262,7 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
     ]);
     const unreadMessages = {};
     unreadCounts.forEach(({ _id, count }) => {
-      unread.Messages[_id] = count;
+      unreadMessages[_id] = count;
     });
     res.json(unreadMessages);
   } catch (error) {
@@ -415,7 +380,6 @@ app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async
   }
 });
 
-// Serve uploaded files
 app.get('/Uploads/:id', async (req, res) => {
   try {
     const fileId = new mongoose.Types.ObjectId(req.params.id);
