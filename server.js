@@ -304,9 +304,9 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     return res.status(400).json({ message: 'currentUser is required' });
   }
   try {
-    const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '');
+    const safeQuery = (query || '').replace(/[^a-zA-Z0-Z0-9_]/g, '');
     console.log('Search query:', { query: safeQuery, currentUser });
-    const regex = new RegExp(safeQuery, 'i');
+    const regex = new RegExp(`^${safeQuery}`, 'i');
     const users = await User.find({
       username: { $regex: regex },
       username: { $ne: currentUser.toLowerCase() },
@@ -314,8 +314,8 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     const usernames = users.map((user) => user.username);
     res.json(usernames);
   } catch (error) {
-    console.error('Search users error:', error.message, error.stack);
-    res.status(500).json({ message: 'Failed to load contacts', error: error.message });
+    console.error('Search users error:', error);
+    res.status(500).json({ message: 'Failed to load contacts' });
   }
 });
 
