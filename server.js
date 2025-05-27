@@ -7,6 +7,7 @@ const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const { GridFSBucket } = require('mongodb');
 const session = require('express-session');
+const MongoStore = require('connect-mongo');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const socketIo = require('socket.io');
@@ -20,7 +21,11 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://convo-frontend.vercel.app',
   'https://convo-frontend.onrender.com',
- 'https://convo-frontend-jidfjedja-sugandhatiwari01s-projects.vercel.app'
+  'https://convo-frontend-7plm7t71y-sugandhatiwari01s-projects.vercel.app',
+  'https://convo-frontend-git-main-sugandhatiwari01s-projects.vercel.app',
+  'https://convo-frontend-nwypo4elu-sugandhatiwari01s-projects.vercel.app',
+  'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
+  'https://convo.app',
 ];
 
 // Validate environment variables
@@ -36,7 +41,7 @@ requiredEnvVars.forEach((varName) => {
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
-      console.log(`Socket.IO origin received: ${origin}`);
+      console.log(`Socket.IO origin: ${origin}, Path: ${origin ? new URL(origin).pathname : 'N/A'}`);
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
@@ -132,12 +137,12 @@ const upload = multer({ storage });
 app.use(
   cors({
     origin: (origin, callback) => {
-      console.log(`HTTP origin received: ${origin}`);
-      if (!origin || allowedOrigins.includes(origin)) {
+      console.log(`HTTP origin: ${origin}, Method: ${callback}, Path: ${origin ? new URL(origin).pathname : 'N/A'}`);
+      if (allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.error(`CORS error: Origin ${origin} not allowed`);
-        callback(new Error(`Not allowed by CORS: ${origin}`));
+        console.error(`CORS error: Origin ${origin || 'undefined'} not allowed`);
+        callback(new Error(`Not allowed by CORS: ${origin || 'undefined'}`));
       }
     },
     credentials: true,
@@ -153,6 +158,11 @@ app.use(
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    store: MongoStore.create({
+      mongoUrl: process.env.MONGO_URL,
+      collectionName: 'sessions',
+      ttl: 24 * 60 * 60, // 1 day
+    }),
   })
 );
 app.use(passport.initialize());
@@ -409,7 +419,7 @@ app.post('/api/messages/sendFile', authenticateJWT, upload.single('file'), async
     uploadStream.write(file.buffer);
     uploadStream.end();
     uploadStream.on('finish', async () => {
-      const message = new User({
+      const message = new Message({
         sender: username.toLowerCase(),
         recipient: recipient.toLowerCase(),
         type: file.mimetype.startsWith('image/') ? 'image' : 'document',
@@ -454,5 +464,5 @@ app.use((err, req, res, next) => {
   res.status(status).json({ message });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
