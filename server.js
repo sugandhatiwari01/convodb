@@ -409,6 +409,31 @@ app.get('/Uploads/:id', async (req, res) => {
     res.status(500).json({ message: 'Failed to retrieve file' });
   }
 });
+// After other routes
+app.get(
+  '/auth/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+app.get(
+  '/auth/google/callback',
+  passport.authenticate('google', {
+    failureRedirect: process.env.FRONTEND_URL
+  }),
+  (req, res) => {
+    const token = jwt.sign(
+      { userId: req.user._id, username: req.user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict'
+    });
+    res.redirect(`${process.env.FRONTEND_URL}?token=${token}&username=${encodeURIComponent(req.user.username)}`);
+  }
+);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
