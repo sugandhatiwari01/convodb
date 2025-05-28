@@ -37,12 +37,21 @@ mongoose
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
     // Create text index for search
     await User.collection.createIndex({ username: 'text' });
-    // Create unique index for username with collation
-    await User.collection.createIndex(
-      { username: 1 },
-      { unique: true, name: 'username_unique', collation: { locale: 'en', strength: 2 } }
-    );
-    console.log('Indexes created successfully');
+    // Check for existing unique index
+    const indexes = await User.collection.indexes();
+    const uniqueIndexExists = indexes.some(index => index.name === 'username_unique');
+    if (!uniqueIndexExists) {
+      try {
+        await User.collection.createIndex(
+          { username: 1 },
+          { unique: true, name: 'username_unique', collation: { locale: 'en', strength: 2 } }
+        );
+        console.log('Unique index created successfully');
+      } catch (err) {
+        console.error('Failed to create unique index:', err.message);
+      }
+    }
+    console.log('Indexes verified');
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
@@ -56,6 +65,14 @@ const userSchema = new mongoose.Schema({
   password: { type: String },
   profilePic: { type: String, default: null },
 }, { timestamps: true });
+
+// Normalize username to lowercase before saving
+userSchema.pre('save', function(next) {
+  if (this.username) {
+    this.username = this.username.toLowerCase();
+  }
+  next();
+});
 
 const User = mongoose.model('User', userSchema);
 
@@ -97,7 +114,10 @@ passport.use(
       try {
         let user = await User.findOne({ email: profile.emails[0].value });
         if (!user) {
-          let username = profile.displayName.replace(/\s/g, '').toLowerCase();
+          let username = profile.displayName
+            .replace(/[^a-zA-Z0-9_]/g, '')
+            .toLowerCase()
+            .slice(0, 20) || 'user';
           let baseUsername = username;
           let counter = 1;
           while (await User.findOne({ username })) {
@@ -185,29 +205,30 @@ io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
   socket.on('registerUser', (username) => {
     socket.join(username.toLowerCase());
-    socket.user = username;
-    io.emit('userStatus', { user: username, status: 'online' });
+    socket.user = username.toLowerCase();
+    io.emit('userStatus', { user: username.toLowerCase(), status: 'online' });
   });
 
   socket.on('sendMessage', async (data, callback) => {
     try {
       const { recipient, message, type, file, messageId, timestamp, username } = data;
       const existingMessage = await Message.findOne({ messageId });
-      if (!existingMessage) {
-        const msg = {
-          messageId,
-          username,
-          text: message,
-          type,
-          file,
-          timestamp: new Date(timestamp),
-        };
-        io.to(recipient.toLowerCase()).emit('receiveMessage', msg);
-        io.to(username.toLowerCase()).emit('receiveMessage', msg);
-        callback({ status: 'ok' });
-      } else {
-        callback({ status: 'ok' });
+      if (existingMessage) {
+        return callback({ status: 'ok', message: 'Message already exists' });
       }
+      const msg = {
+        sender: username.toLowerCase(),
+        recipient: recipient.toLowerCase(),
+        text: message,
+        type,
+        file,
+        timestamp: new Date(timestamp),
+        messageId,
+      };
+      await new Message(msg).save();
+      io.to(recipient.toLowerCase()).emit('receiveMessage', msg);
+      io.to(username.toLowerCase()).emit('receiveMessage', msg);
+      callback({ status: 'ok' });
     } catch (error) {
       console.error('Socket.IO sendMessage error:', error.message);
       callback({ status: 'error', message: 'Failed to send message' });
@@ -322,7 +343,7 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
         .collation({ locale: 'en', strength: 2 })
         .sort({ username: 1 })
         .select('username')
-        .limit(50);
+        .limit(20);
       return res.json(users.map((user) => user.username));
     }
     const users = await User.find(
@@ -334,7 +355,7 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
     )
       .sort({ score: { $meta: 'textScore' }, username: 1 })
       .select('username')
-      .limit(50);
+      .limit(20);
     res.json(users.map((user) => user.username));
   } catch (error) {
     console.error('Search users error:', error);
@@ -407,12 +428,16 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
 app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, res) => {
   try {
     const { currentUser, recipient } = req.params;
+    const { page = 1, limit = 50 } = req.query;
     const messages = await Message.find({
       $or: [
         { sender: currentUser.toLowerCase(), recipient: recipient.toLowerCase() },
         { sender: recipient.toLowerCase(), recipient: currentUser.toLowerCase() },
       ],
-    }).sort({ timestamp: 1 });
+    })
+      .sort({ timestamp: 1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
     res.json(
       messages.map((msg) => ({
         messageId: msg.messageId,
@@ -436,6 +461,7 @@ app.post('/api/messages/mark-read/:currentUser/:recipient', authenticateJWT, asy
       { sender: recipient.toLowerCase(), recipient: currentUser.toLowerCase(), read: false },
       { read: true }
     );
+    io.to(currentUser.toLowerCase()).emit('messagesRead', { recipient: recipient.toLowerCase() });
     res.json({ message: 'Messages marked as read' });
   } catch (error) {
     console.error('Mark read error:', error.message);
@@ -448,6 +474,11 @@ app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
     const { sender, recipient, text, timestamp } = req.body;
     if (!sender || !recipient || !text || !timestamp) {
       return res.status(400).json({ message: 'Missing required fields' });
+    }
+    const senderExists = await User.findOne({ username: sender.toLowerCase() });
+    const recipientExists = await User.findOne({ username: recipient.toLowerCase() });
+    if (!senderExists || !recipientExists) {
+      return res.status(400).json({ message: 'Invalid sender or recipient' });
     }
     const messageId = new mongoose.Types.ObjectId().toString();
     const message = new Message({
@@ -479,6 +510,11 @@ app.post('/api/messages/uploadFile', authenticateJWT, upload.single('file'), asy
     const file = req.file;
     if (!file || !recipient || !username || !timestamp) {
       return res.status(400).json({ message: 'Missing required fields' });
+    }
+    const senderExists = await User.findOne({ username: username.toLowerCase() });
+    const recipientExists = await User.findOne({ username: recipient.toLowerCase() });
+    if (!senderExists || !recipientExists) {
+      return res.status(400).json({ message: 'Invalid sender or recipient' });
     }
     const uploadStream = gridFSBucket.openUploadStream(file.originalname);
     uploadStream.write(file.buffer);
