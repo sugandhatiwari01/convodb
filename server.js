@@ -11,6 +11,7 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const socketIo = require('socket.io');
 const http = require('http');
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
@@ -19,8 +20,7 @@ const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
-      // Allow all *.vercel.app origins and localhost
-      if (!origin || origin.match(/\.vercel\.app$/) || origin === 'http://localhost:3000') {
+      if (!origin || origin.endsWith('.vercel.app') || origin === 'http://localhost:3000') {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
@@ -31,6 +31,22 @@ const io = socketIo(server, {
   },
 });
 
+// CORS middleware
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || origin.endsWith('.vercel.app') || origin === 'http://localhost:3000') {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
+
 // MongoDB connection and GridFS setup
 let gridFSBucket;
 mongoose
@@ -38,9 +54,7 @@ mongoose
   .then(async () => {
     console.log('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
-    // Create text index for search
     await User.collection.createIndex({ username: 'text' });
-    // Check for existing unique index
     const indexes = await User.collection.indexes();
     const uniqueIndexExists = indexes.some((index) => index.name === 'username_unique');
     if (!uniqueIndexExists) {
@@ -72,7 +86,6 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Normalize username to lowercase before saving
 userSchema.pre('save', function (next) {
   if (this.username) {
     this.username = this.username.toLowerCase();
@@ -82,6 +95,7 @@ userSchema.pre('save', function (next) {
 
 const User = mongoose.model('User', userSchema);
 
+// Message Schema
 const messageSchema = new mongoose.Schema({
   sender: { type: String, required: true },
   recipient: { type: String, required: true },
@@ -159,22 +173,6 @@ const upload = multer({
 });
 
 // Middleware
-// In server.js
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && (origin.match(/\.vercel\.app$/) || origin === 'http://localhost:3000')) {
-    console.log('CORS allowing origin:', origin); // Debug log
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  }
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-  next();
-});
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
