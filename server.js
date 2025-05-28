@@ -1,6 +1,5 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
@@ -19,10 +18,14 @@ const server = http.createServer(app);
 // Socket.IO configuration
 const io = socketIo(server, {
   cors: {
-    origin: [
-      'http://localhost:3000',
-      'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
-    ],
+    origin: (origin, callback) => {
+      // Allow all *.vercel.app origins and localhost
+      if (!origin || origin.match(/\.vercel\.app$/) || origin === 'http://localhost:3000') {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST'],
   },
@@ -39,7 +42,7 @@ mongoose
     await User.collection.createIndex({ username: 'text' });
     // Check for existing unique index
     const indexes = await User.collection.indexes();
-    const uniqueIndexExists = indexes.some(index => index.name === 'username_unique');
+    const uniqueIndexExists = indexes.some((index) => index.name === 'username_unique');
     if (!uniqueIndexExists) {
       try {
         await User.collection.createIndex(
@@ -59,15 +62,18 @@ mongoose
   });
 
 // User Schema
-const userSchema = new mongoose.Schema({
-  email: { type: String, required: true, unique: true },
-  username: { type: String, required: true, unique: true },
-  password: { type: String },
-  profilePic: { type: String, default: null },
-}, { timestamps: true });
+const userSchema = new mongoose.Schema(
+  {
+    email: { type: String, required: true, unique: true },
+    username: { type: String, required: true, unique: true },
+    password: { type: String },
+    profilePic: { type: String, default: null },
+  },
+  { timestamps: true }
+);
 
 // Normalize username to lowercase before saving
-userSchema.pre('save', function(next) {
+userSchema.pre('save', function (next) {
   if (this.username) {
     this.username = this.username.toLowerCase();
   }
@@ -114,10 +120,8 @@ passport.use(
       try {
         let user = await User.findOne({ email: profile.emails[0].value });
         if (!user) {
-          let username = profile.displayName
-            .replace(/[^a-zA-Z0-9_]/g, '')
-            .toLowerCase()
-            .slice(0, 20) || 'user';
+          let username =
+            profile.displayName.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase().slice(0, 20) || 'user';
           let baseUsername = username;
           let counter = 1;
           while (await User.findOne({ username })) {
@@ -155,17 +159,22 @@ const upload = multer({
 });
 
 // Middleware
-app.use(
-  cors({
-    origin: [
-      'http://localhost:3000',
-      'https://convo-frontend-f4u48evtl-sugandhatiwari01s-projects.vercel.app',
-    ],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  // Allow all *.vercel.app origins and localhost for development
+  if (origin && (origin.match(/\.vercel\.app$/) || origin === 'http://localhost:3000')) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -285,7 +294,9 @@ app.post('/api/users/register', async (req, res) => {
       return res.status(400).json({ message: 'All fields required' });
     }
     if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) {
-      return res.status(400).json({ message: 'Username must be 3-20 characters (letters, numbers, underscores)' });
+      return res.status(400).json({
+        message: 'Username must be 3-20 characters (letters, numbers, underscores)',
+      });
     }
     if (!/^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$/.test(email)) {
       return res.status(400).json({ message: 'Invalid email format' });
@@ -321,7 +332,11 @@ app.post('/api/users/login', async (req, res) => {
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
-    const token = jwt.sign({ userId: user._id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign(
+      { userId: user._id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
     res.json({ token, username: user.username });
   } catch (error) {
     console.error('Login error:', error.message);
