@@ -17,24 +17,45 @@ const app = express();
 const server = http.createServer(app);
 
 // Socket.IO configuration
-const io = socketIo(server, {
-  cors: {
-    origin: ['http://localhost:3000', 'https://*.vercel.app'],
-    credentials: true,
-    methods: ['GET', 'POST'],
-  },
-});
-
-// CORS middleware
 app.use(
   cors({
-    origin: ['http://localhost:3000', 'https://*.vercel.app'],
+    origin: (origin, callback) => {
+      // Allow localhost for development
+      if (!origin || origin === 'http://localhost:3000') {
+        return callback(null, true);
+      }
+      // Allow any Vercel deployment URL
+      if (origin && origin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+      // Allow your custom domain (if set up)
+      if (origin === 'https://<your-custom-domain>') {
+        return callback(null, true);
+      }
+      callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
 
+// Update Socket.IO CORS configuration
+const io = socketIo(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin || origin === 'http://localhost:3000' || origin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+      if (origin === 'https://<your-custom-domain>') {
+        return callback(null, true);
+      }
+      callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST'],
+  },
+});
 // MongoDB connection and GridFS setup
 let gridFSBucket;
 mongoose
