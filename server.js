@@ -12,17 +12,55 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const socketIo = require('socket.io');
 const http = require('http');
 const cors = require('cors');
+const winston = require('winston'); // Added for logging
+const mongooseRetry = require('mongoose-retry'); // Added for MongoDB retry
 
 const app = express();
 const server = http.createServer(app);
 
+// Logger setup
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' }),
+  ],
+});
+
+// Environment variable validation
+const requiredEnvVars = [
+  'MONGO_URL',
+  'JWT_SECRET',
+  'SESSION_SECRET',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'GOOGLE_CALLBACK_URL',
+  'FRONTEND_URL',
+];
+const missingVars = requiredEnvVars.filter((varName) => !process.env[varName]);
+if (missingVars.length) {
+  logger.error(`Missing environment variables: ${missingVars.join(', ')}`);
+  process.exit(1);
+}
+
 // Socket.IO configuration
+const allowedOrigins = [
+  process.env.NODE_ENV === 'production'
+    ? process.env.FRONTEND_URL
+    : 'http://localhost:3000',
+];
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin || origin.endsWith('.vercel.app') || origin === 'http://localhost:3000') {
+      if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
+        logger.warn(`CORS blocked for origin: ${origin}`);
         callback(new Error('Not allowed by CORS'));
       }
     },
@@ -35,9 +73,10 @@ const io = socketIo(server, {
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || origin.endsWith('.vercel.app') || origin === 'http://localhost:3000') {
+      if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
+        logger.warn(`CORS blocked for origin: ${origin}`);
         callback(new Error('Not allowed by CORS'));
       }
     },
@@ -47,12 +86,13 @@ app.use(
   })
 );
 
-// MongoDB connection and GridFS setup
+// MongoDB connection with retry
+mongoose.set('plugin', mongooseRetry({ count: 5, backoff: 1000 }));
 let gridFSBucket;
 mongoose
   .connect(process.env.MONGO_URL)
   .then(async () => {
-    console.log('Connected to MongoDB');
+    logger.info('Connected to MongoDB');
     gridFSBucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'Uploads' });
     await User.collection.createIndex({ username: 'text' });
     const indexes = await User.collection.indexes();
@@ -63,15 +103,15 @@ mongoose
           { username: 1 },
           { unique: true, name: 'username_unique', collation: { locale: 'en', strength: 2 } }
         );
-        console.log('Unique index created successfully');
+        logger.info('Unique index created on username');
       } catch (err) {
-        console.error('Failed to create unique index:', err.message);
+        logger.error('Failed to create unique index:', err.message);
       }
     }
-    console.log('Indexes verified');
+    logger.info('MongoDB indexes verified');
   })
   .catch((err) => {
-    console.error('MongoDB connection error:', err);
+    logger.error('MongoDB connection error:', err.message);
     process.exit(1);
   });
 
@@ -83,7 +123,7 @@ const userSchema = new mongoose.Schema(
     password: { type: String },
     profilePic: { type: String, default: null },
   },
-  { timestamps: true }
+  { timestamps: true, collation: { locale: 'en', strength: 2 } } // Case-insensitive queries
 );
 
 userSchema.pre('save', function (next) {
@@ -119,6 +159,7 @@ passport.deserializeUser(async (id, done) => {
     const user = await User.findById(id);
     done(null, user);
   } catch (err) {
+    logger.error('Deserialize user error:', err.message);
     done(err, null);
   }
 });
@@ -148,9 +189,11 @@ passport.use(
             password: null,
           });
           await user.save();
+          logger.info(`New Google user created: ${username}`);
         }
         done(null, user);
       } catch (err) {
+        logger.error('Google auth error:', err.message);
         done(err, null);
       }
     }
@@ -195,6 +238,7 @@ app.use(passport.session());
 const authenticateJWT = (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
   if (!token) {
+    logger.warn('Authentication required: No token provided');
     return res.status(401).json({ message: 'Authentication required' });
   }
   try {
@@ -202,18 +246,19 @@ const authenticateJWT = (req, res, next) => {
     req.user = decoded;
     next();
   } catch (error) {
-    console.error('JWT error:', error.message);
+    logger.error('JWT verification error:', error.message);
     res.status(401).json({ message: 'Invalid token' });
   }
 };
 
 // Socket.IO
 io.on('connection', (socket) => {
-  console.log('New client connected:', socket.id);
+  logger.info(`New client connected: ${socket.id}`);
   socket.on('registerUser', (username) => {
     socket.join(username.toLowerCase());
     socket.user = username.toLowerCase();
     io.emit('userStatus', { user: username.toLowerCase(), status: 'online' });
+    logger.info(`User registered: ${username}`);
   });
 
   socket.on('sendMessage', async (data, callback) => {
@@ -221,9 +266,10 @@ io.on('connection', (socket) => {
       const { recipient, message, type, file, messageId, timestamp, username } = data;
       const existingMessage = await Message.findOne({ messageId });
       if (existingMessage) {
+        logger.warn(`Duplicate messageId: ${messageId}`);
         return callback({ status: 'ok', message: 'Message already exists' });
       }
-      const msg = {
+      const msg = new Message({
         sender: username.toLowerCase(),
         recipient: recipient.toLowerCase(),
         text: message,
@@ -231,13 +277,14 @@ io.on('connection', (socket) => {
         file,
         timestamp: new Date(timestamp),
         messageId,
-      };
-      await new Message(msg).save();
-      io.to(recipient.toLowerCase()).emit('receiveMessage', msg);
-      io.to(username.toLowerCase()).emit('receiveMessage', msg);
+      });
+      await msg.save();
+      io.to(recipient.toLowerCase()).emit('receiveMessage', msg.toObject());
+      io.to(username.toLowerCase()).emit('receiveMessage', msg.toObject());
+      logger.info(`Message sent from ${username} to ${recipient}`);
       callback({ status: 'ok' });
     } catch (error) {
-      console.error('Socket.IO sendMessage error:', error.message);
+      logger.error('Socket.IO sendMessage error:', error.message);
       callback({ status: 'error', message: 'Failed to send message' });
     }
   });
@@ -251,7 +298,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
+    logger.info(`Client disconnected: ${socket.id}`);
     if (socket.user) {
       io.emit('userStatus', { user: socket.user, status: 'offline' });
     }
@@ -271,14 +318,16 @@ app.get(
         process.env.JWT_SECRET,
         { expiresIn: '1h' }
       );
-      res.redirect(
-        `${process.env.FRONTEND_URL}?token=${token}&username=${encodeURIComponent(req.user.username)}`
-      );
+      const redirectUrl = new URL(process.env.FRONTEND_URL);
+      redirectUrl.searchParams.set('token', token);
+      redirectUrl.searchParams.set('username', encodeURIComponent(req.user.username));
+      res.redirect(redirectUrl.toString());
+      logger.info(`Google auth successful for user: ${req.user.username}`);
     } catch (error) {
-      console.error('Google auth callback error:', error.message);
-      res.redirect(
-        `${process.env.FRONTEND_URL}?error=${encodeURIComponent('Authentication failed')}`
-      );
+      logger.error('Google auth callback error:', error.message);
+      const redirectUrl = new URL(process.env.FRONTEND_URL);
+      redirectUrl.searchParams.set('error', encodeURIComponent('Authentication failed'));
+      res.redirect(redirectUrl.toString());
     }
   }
 );
@@ -286,7 +335,7 @@ app.get(
 // Routes
 app.post('/api/users/register', async (req, res) => {
   let { email, username, password } = req.body;
-  username = username.toLowerCase();
+  username = username?.toLowerCase();
   try {
     if (!email || !username || !password) {
       return res.status(400).json({ message: 'All fields required' });
@@ -311,10 +360,10 @@ app.post('/api/users/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({ email, username, password: hashedPassword });
     await user.save();
-
+    logger.info(`User registered: ${username}`);
     res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
-    console.error('Registration error:', error.message);
+    logger.error('Registration error:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -322,6 +371,9 @@ app.post('/api/users/register', async (req, res) => {
 app.post('/api/users/login', async (req, res) => {
   const { email, password } = req.body;
   try {
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password required' });
+    }
     const user = await User.findOne({ email });
     if (!user || !user.password) {
       return res.status(400).json({ message: 'Invalid credentials' });
@@ -335,43 +387,48 @@ app.post('/api/users/login', async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
+    logger.info(`User logged in: ${user.username}`);
     res.json({ token, username: user.username });
   } catch (error) {
-    console.error('Login error:', error.message);
+    logger.error('Login error:', error.message);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
 app.get('/api/users/search', authenticateJWT, async (req, res) => {
-  const { query, currentUser } = req.query;
+  const { query, currentUser, page = 1, limit = 20 } = req.query;
   if (!currentUser) {
     return res.status(400).json({ message: 'currentUser is required' });
   }
   try {
     const safeQuery = (query || '').replace(/[^a-zA-Z0-9_]/g, '').trim();
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    let users;
     if (!safeQuery) {
-      const users = await User.find({
+      users = await User.find({
         username: { $ne: currentUser.toLowerCase() },
       })
         .collation({ locale: 'en', strength: 2 })
         .sort({ username: 1 })
-        .select('username')
-        .limit(20);
-      return res.json(users.map((user) => user.username));
+        .skip(skip)
+        .limit(parseInt(limit))
+        .select('username');
+    } else {
+      users = await User.find(
+        {
+          $text: { $search: safeQuery },
+          username: { $ne: currentUser.toLowerCase() },
+        },
+        { score: { $meta: 'textScore' } }
+      )
+        .sort({ score: { $meta: 'textScore' }, username: 1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .select('username');
     }
-    const users = await User.find(
-      {
-        $text: { $search: safeQuery },
-        username: { $ne: currentUser.toLowerCase() },
-      },
-      { score: { $meta: 'textScore' } }
-    )
-      .sort({ score: { $meta: 'textScore' }, username: 1 })
-      .select('username')
-      .limit(20);
     res.json(users.map((user) => user.username));
   } catch (error) {
-    console.error('Search users error:', error);
+    logger.error('Search users error:', error.message);
     res.status(500).json({ message: 'Failed to load contacts' });
   }
 });
@@ -389,20 +446,24 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
     });
     res.json(unreadMessages);
   } catch (error) {
-    console.error('Unread messages error:', error.message);
+    logger.error('Unread messages error:', error.message);
     res.status(500).json({ message: 'Failed to fetch unread messages' });
   }
 });
 
 app.get('/api/users/profile-pic/:username', authenticateJWT, async (req, res) => {
   try {
-    const user = await User.findOne({ username: req.params.username.toLowerCase() });
+    const user = await User.findOne(
+      { username: req.params.username.toLowerCase() },
+      null,
+      { collation: { locale: 'en', strength: 2 } }
+    );
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
     res.json({ profilePic: user.profilePic || null });
   } catch (error) {
-    console.error('Profile pic error:', error.message);
+    logger.error('Profile pic error:', error.message);
     res.status(500).json({ message: 'Failed to fetch profile pic' });
   }
 });
@@ -415,25 +476,33 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
       return res.status(400).json({ message: 'File and username are required' });
     }
     const uploadStream = gridFSBucket.openUploadStream(file.originalname);
+    uploadStream.on('error', (err) => {
+      logger.error('Profile pic upload stream error:', err.message);
+      res.status(500).json({ message: 'Failed to upload file' });
+    });
     uploadStream.write(file.buffer);
     uploadStream.end();
     uploadStream.on('finish', async () => {
-      const oldProfilePic = (await User.findOne({ username: username.toLowerCase() })).profilePic;
+      const user = await User.findOne({ username: username.toLowerCase() });
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      const oldProfilePic = user.profilePic;
       if (oldProfilePic) {
         try {
           await gridFSBucket.delete(new mongoose.Types.ObjectId(oldProfilePic));
+          logger.info(`Deleted old profile pic: ${oldProfilePic}`);
         } catch (err) {
-          console.warn('Failed to delete old profile pic:', err.message);
+          logger.warn('Failed to delete old profile pic:', err.message);
         }
       }
-      await User.updateOne(
-        { username: username.toLowerCase() },
-        { profilePic: uploadStream.id.toString() }
-      );
+      user.profilePic = uploadStream.id.toString();
+      await user.save();
+      logger.info(`Profile pic updated for user: ${username}`);
       res.json({ filename: uploadStream.id.toString() });
     });
   } catch (error) {
-    console.error('Profile pic upload error:', error.message);
+    logger.error('Profile pic upload error:', error.message);
     res.status(500).json({ message: 'Failed to upload profile picture' });
   }
 });
@@ -448,8 +517,9 @@ app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, re
         { sender: recipient.toLowerCase(), recipient: currentUser.toLowerCase() },
       ],
     })
+      .collation({ locale: 'en', strength: 2 })
       .sort({ timestamp: 1 })
-      .skip((page - 1) * limit)
+      .skip((parseInt(page) - 1) * parseInt(limit))
       .limit(parseInt(limit));
     res.json(
       messages.map((msg) => ({
@@ -462,7 +532,7 @@ app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, re
       }))
     );
   } catch (error) {
-    console.error('Fetch messages error:', error.message);
+    logger.error('Fetch messages error:', error.message);
     res.status(500).json({ message: 'Failed to fetch messages' });
   }
 });
@@ -472,12 +542,14 @@ app.post('/api/messages/mark-read/:currentUser/:recipient', authenticateJWT, asy
     const { currentUser, recipient } = req.params;
     await Message.updateMany(
       { sender: recipient.toLowerCase(), recipient: currentUser.toLowerCase(), read: false },
-      { read: true }
+      { read: true },
+      { collation: { locale: 'en', strength: 2 } }
     );
     io.to(currentUser.toLowerCase()).emit('messagesRead', { recipient: recipient.toLowerCase() });
+    logger.info(`Messages marked read for ${currentUser} from ${recipient}`);
     res.json({ message: 'Messages marked as read' });
   } catch (error) {
-    console.error('Mark read error:', error.message);
+    logger.error('Mark read error:', error.message);
     res.status(500).json({ message: 'Failed to mark messages as read' });
   }
 });
@@ -488,8 +560,16 @@ app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
     if (!sender || !recipient || !text || !timestamp) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
-    const senderExists = await User.findOne({ username: sender.toLowerCase() });
-    const recipientExists = await User.findOne({ username: recipient.toLowerCase() });
+    const senderExists = await User.findOne(
+      { username: sender.toLowerCase() },
+      null,
+      { collation: { locale: 'en', strength: 2 } }
+    );
+    const recipientExists = await User.findOne(
+      { username: recipient.toLowerCase() },
+      null,
+      { collation: { locale: 'en', strength: 2 } }
+    );
     if (!senderExists || !recipientExists) {
       return res.status(400).json({ message: 'Invalid sender or recipient' });
     }
@@ -503,6 +583,7 @@ app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
       messageId,
     });
     await message.save();
+    logger.info(`Text message sent from ${sender} to ${recipient}`);
     res.json({
       messageId: message.messageId,
       sender: message.sender,
@@ -512,7 +593,7 @@ app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
       timestamp: message.timestamp,
     });
   } catch (error) {
-    console.error('Text message save error:', error.message);
+    logger.error('Text message save error:', error.message);
     res.status(500).json({ message: 'Failed to send message' });
   }
 });
@@ -524,12 +605,24 @@ app.post('/api/messages/uploadFile', authenticateJWT, upload.single('file'), asy
     if (!file || !recipient || !username || !timestamp) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
-    const senderExists = await User.findOne({ username: username.toLowerCase() });
-    const recipientExists = await User.findOne({ username: recipient.toLowerCase() });
+    const senderExists = await User.findOne(
+      { username: username.toLowerCase() },
+      null,
+      { collation: { locale: 'en', strength: 2 } }
+    );
+    const recipientExists = await User.findOne(
+      { username: recipient.toLowerCase() },
+      null,
+      { collation: { locale: 'en', strength: 2 } }
+    );
     if (!senderExists || !recipientExists) {
       return res.status(400).json({ message: 'Invalid sender or recipient' });
     }
     const uploadStream = gridFSBucket.openUploadStream(file.originalname);
+    uploadStream.on('error', (err) => {
+      logger.error('File upload stream error:', err.message);
+      res.status(500).json({ message: 'Failed to upload file' });
+    });
     uploadStream.write(file.buffer);
     uploadStream.end();
     uploadStream.on('finish', async () => {
@@ -543,6 +636,7 @@ app.post('/api/messages/uploadFile', authenticateJWT, upload.single('file'), asy
         messageId,
       });
       await message.save();
+      logger.info(`File message sent from ${username} to ${recipient}`);
       res.json({
         messageId: message.messageId,
         sender: username,
@@ -553,7 +647,7 @@ app.post('/api/messages/uploadFile', authenticateJWT, upload.single('file'), asy
       });
     });
   } catch (error) {
-    console.error('File upload error:', error.message);
+    logger.error('File upload error:', error.message);
     res.status(500).json({ message: 'Failed to send file' });
   }
 });
@@ -563,6 +657,7 @@ app.get('/Uploads/:id', async (req, res) => {
     const fileId = new mongoose.Types.ObjectId(req.params.id);
     const downloadStream = gridFSBucket.openDownloadStream(fileId);
     downloadStream.on('error', () => {
+      logger.warn(`File not found: ${req.params.id}`);
       res.status(404).json({ message: 'File not found' });
     });
     const file = await gridFSBucket.find({ _id: fileId }).next();
@@ -576,18 +671,20 @@ app.get('/Uploads/:id', async (req, res) => {
     }
     downloadStream.pipe(res);
   } catch (error) {
-    console.error('File download error:', error.message);
+    logger.error('File download error:', error.message);
     res.status(500).json({ message: 'Failed to retrieve file' });
   }
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err.message);
+  logger.error(`Unhandled error: ${err.message}`, { stack: err.stack });
   const status = err.status || 500;
   const message = process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message;
   res.status(status).json({ message });
 });
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => {
+  logger.info(`Server running on port ${PORT}`);
+});
