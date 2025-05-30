@@ -21,18 +21,10 @@ const server = http.createServer(app);
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow localhost for development
-      if (!origin || origin === 'http://localhost:3000') {
+      if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-frontend.vercel.app' || origin.endsWith('.vercel.app')) {
         return callback(null, true);
       }
-      // Allow any Vercel deployment URL
-      if (origin && origin.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
-      // Allow your custom domain (if set up)
-if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-frontend.vercel.app' || origin.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
+      console.log(`CORS request blocked: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
@@ -40,17 +32,15 @@ if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-f
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
-
+app.options('*', cors());
 // Update Socket.IO CORS configuration
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin || origin === 'http://localhost:3000' || origin.endsWith('.vercel.app')) {
+      if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-frontend.vercel.app' || origin.endsWith('.vercel.app')) {
         return callback(null, true);
       }
-    if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-frontend.vercel.app' || origin.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
+      console.log(`Socket.IO CORS request blocked: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
@@ -354,20 +344,20 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
 
     if (!file || !username) {
       if (file) fs.unlinkSync(file.path);
-      console.log('Missing file or username in profile picture upload', { username });
+      console.log(`Missing file or username in profile picture upload for ${username}`);
       return res.status(400).json({ message: 'File and username are required' });
     }
 
     if (username.toLowerCase() !== authenticatedUser) {
       if (file) fs.unlinkSync(file.path);
-      console.log('Username mismatch in profile picture upload', { requestedUsername: username, authenticatedUser });
+      console.log(`Username mismatch: requested=${username}, authenticated=${authenticatedUser}`);
       return res.status(403).json({ message: 'Unauthorized to update this profile' });
     }
 
     const user = await User.findOne({ username: username.toLowerCase() });
     if (!user) {
       if (file) fs.unlinkSync(file.path);
-      console.log('User not found for profile picture upload', { username });
+      console.log(`User not found: ${username}`);
       return res.status(404).json({ message: 'User not found' });
     }
 
@@ -378,7 +368,7 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
     readStream.pipe(uploadStream);
 
     uploadStream.on('error', (error) => {
-      console.log('GridFS upload error', { error: error.message, username, file: file.originalname });
+      console.log(`GridFS upload error for ${username}: ${error.message}`);
       fs.unlinkSync(file.path);
       res.status(500).json({ message: 'Failed to upload file to GridFS' });
     });
@@ -389,17 +379,17 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
           { username: username.toLowerCase() },
           { profilePic: uploadStream.id.toString() }
         );
-        console.log('Profile picture updated successfully', { username, fileId: uploadStream.id.toString() });
+        console.log(`Profile picture updated for ${username}, fileId=${uploadStream.id.toString()}`);
         fs.unlinkSync(file.path);
         res.status(200).json({ filename: uploadStream.id.toString() });
       } catch (error) {
-        console.log('Error updating user profile picture', { error: error.message, username });
+        console.log(`Error updating profile picture for ${username}: ${error.message}`);
         fs.unlinkSync(file.path);
         res.status(500).json({ message: 'Failed to update profile picture' });
       }
     });
   } catch (error) {
-    console.log('Profile picture upload failed', { error: error.message, username: req.body.username });
+    console.log(`Profile picture upload failed for ${req.body.username}: ${error.message}`);
     if (req.file) fs.unlinkSync(req.file.path);
     res.status(500).json({ message: error.message || 'Failed to upload profile picture' });
   }
