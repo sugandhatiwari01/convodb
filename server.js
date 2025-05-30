@@ -12,25 +12,17 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const socketIo = require('socket.io');
 const http = require('http');
 const cors = require('cors');
-const path = require('path'); // Added import
+const path = require('path');
 const fs = require('fs');
+
 const app = express();
 const server = http.createServer(app);
 
-// Socket.IO configuration
+// CORS configuration
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow localhost for development
-      if (!origin || origin === 'http://localhost:3000') {
-        return callback(null, true);
-      }
-      // Allow any Vercel deployment URL
-      if (origin && origin.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
-      // Allow your custom domain (if set up)
-if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-frontend.vercel.app' || origin.endsWith('.vercel.app')) {
+      if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-frontend.vercel.app' || origin.endsWith('.vercel.app')) {
         return callback(null, true);
       }
       callback(new Error('Not allowed by CORS'));
@@ -41,14 +33,11 @@ if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-f
   })
 );
 
-// Update Socket.IO CORS configuration
+// Socket.IO configuration
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin || origin === 'http://localhost:3000' || origin.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
-    if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-frontend.vercel.app' || origin.endsWith('.vercel.app')) {
+      if (!origin || origin === 'http://localhost:3000' || origin === 'https://convo-frontend.vercel.app' || origin.endsWith('.vercel.app')) {
         return callback(null, true);
       }
       callback(new Error('Not allowed by CORS'));
@@ -57,6 +46,7 @@ const io = socketIo(server, {
     methods: ['GET', 'POST'],
   },
 });
+
 // MongoDB connection and GridFS setup
 let gridFSBucket;
 mongoose
@@ -106,9 +96,6 @@ const messageSchema = new mongoose.Schema({
   messageId: { type: String, unique: true },
   timestamp: { type: Date, default: Date.now },
 });
-
-
-
 
 const Message = mongoose.model('Message', messageSchema);
 
@@ -163,7 +150,7 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const extension = path.extname(file.originalname).toLowerCase();
-    const username = req.body.username || 'unknown'; // Fallback if username is missing
+    const username = req.body.username || 'unknown';
     cb(null, `${username.toLowerCase()}_${Date.now()}${extension}`);
   },
 });
@@ -172,11 +159,11 @@ const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif'];
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'application/pdf'];
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Only JPEG, PNG, JPG, and GIF images allowed'), false);
+      cb(new Error('Only JPEG, PNG, JPG, GIF, and PDF files allowed'), false);
     }
   },
 });
@@ -234,6 +221,7 @@ io.on('connection', (socket) => {
       io.to(username.toLowerCase()).emit('receiveMessage', msg);
       callback({ status: 'ok' });
     } catch (error) {
+      console.error(`Send message error: ${error.message}`);
       callback({ status: 'error', message: 'Failed to send message' });
     }
   });
@@ -252,7 +240,6 @@ io.on('connection', (socket) => {
 });
 
 // Routes
-
 app.post('/api/users/register', async (req, res) => {
   const { email, username, password } = req.body;
   try {
@@ -277,6 +264,7 @@ app.post('/api/users/register', async (req, res) => {
     await user.save();
     res.status(201).json({ message: 'Registered successfully' });
   } catch (error) {
+    console.error(`Register error: ${error.message}`);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -297,6 +285,7 @@ app.post('/api/users/login', async (req, res) => {
     });
     res.json({ token, username: user.username });
   } catch (error) {
+    console.error(`Login error: ${error.message}`);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -334,6 +323,7 @@ app.get('/api/users/search', authenticateJWT, async (req, res) => {
           .limit(20);
     res.json(users.map((u) => u.username));
   } catch (error) {
+    console.error(`Search users error: ${error.message}`);
     res.status(500).json({ message: 'Failed to load contacts' });
   }
 });
@@ -343,6 +333,7 @@ app.get('/api/users/profile-pic/:username', authenticateJWT, async (req, res) =>
     const user = await User.findOne({ username: req.params.username.toLowerCase() });
     res.json({ profilePic: user?.profilePic || null });
   } catch (error) {
+    console.error(`Fetch profile pic error for ${req.params.username}: ${error.message}`);
     res.status(500).json({ message: 'Failed to fetch profile pic' });
   }
 });
@@ -406,8 +397,6 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
   }
 });
 
-// Consolidated route for retrieving profile pictures
-
 app.get('/Uploads/:id', async (req, res) => {
   try {
     res.set('Access-Control-Allow-Origin', 'https://convo-frontend.vercel.app');
@@ -433,7 +422,6 @@ app.get('/Uploads/:id', async (req, res) => {
   }
 });
 
-
 app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, res) => {
   try {
     const { currentUser, recipient } = req.params;
@@ -445,6 +433,7 @@ app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, re
     }).sort({ timestamp: 1 });
     res.json(messages);
   } catch (error) {
+    console.error(`Fetch messages error: ${error.message}`);
     res.status(500).json({ message: 'Failed to fetch messages' });
   }
 });
@@ -464,6 +453,7 @@ app.post('/api/messages/sendText', authenticateJWT, async (req, res) => {
     await message.save();
     res.json(message);
   } catch (error) {
+    console.error(`Send text message error: ${error.message}`);
     res.status(500).json({ message: 'Failed to send message' });
   }
 });
@@ -473,29 +463,48 @@ app.post('/api/messages/uploadFile', authenticateJWT, upload.single('file'), asy
     const { recipient, username, timestamp } = req.body;
     const file = req.file;
     if (!file || !recipient || !username || !timestamp) {
+      if (file) fs.unlinkSync(file.path);
       return res.status(400).json({ message: 'Missing required fields' });
     }
-    const uploadStream = gridFSBucket.openUploadStream(file.originalname);
-    uploadStream.write(file.buffer);
-    uploadStream.end();
+
+    const uploadStream = gridFSBucket.openUploadStream(file.originalname, {
+      contentType: file.mimetype,
+    });
+    const readStream = fs.createReadStream(file.path);
+    readStream.pipe(uploadStream);
+
+    uploadStream.on('error', (error) => {
+      console.error(`GridFS upload error: ${error.message}`);
+      fs.unlinkSync(file.path);
+      res.status(500).json({ message: 'Failed to upload file to GridFS' });
+    });
+
     uploadStream.on('finish', async () => {
-      const messageId = new mongoose.Types.ObjectId().toString();
-      const message = new Message({
-        sender: username.toLowerCase(),
-        recipient: recipient.toLowerCase(),
-        type: file.mimetype.startsWith('image/') ? 'image' : 'document',
-        file: uploadStream.id.toString(),
-        messageId,
-        timestamp: new Date(timestamp),
-      });
-      await message.save();
-      res.json(message);
+      try {
+        const messageId = new mongoose.Types.ObjectId().toString();
+        const message = new Message({
+          sender: username.toLowerCase(),
+          recipient: recipient.toLowerCase(),
+          type: file.mimetype.startsWith('image/') ? 'image' : 'document',
+          file: uploadStream.id.toString(),
+          messageId,
+          timestamp: new Date(timestamp),
+        });
+        await message.save();
+        fs.unlinkSync(file.path);
+        res.json(message);
+      } catch (error) {
+        console.error(`Error saving message: ${error.message}`);
+        fs.unlinkSync(file.path);
+        res.status(500).json({ message: 'Failed to save message' });
+      }
     });
   } catch (error) {
+    console.error(`Upload file error: ${error.message}`);
+    if (req.file) fs.unlinkSync(req.file.path);
     res.status(500).json({ message: 'Failed to send file' });
   }
 });
-
 
 app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
   try {
@@ -510,6 +519,7 @@ app.get('/api/messages/unread/:username', authenticateJWT, async (req, res) => {
     });
     res.json(unreadMessages);
   } catch (error) {
+    console.error(`Failed to fetch unread messages for ${username.toLowerCase()}: ${error.message}`);
     res.status(500).json({ message: 'Failed to fetch unread messages' });
   }
 });
@@ -524,6 +534,7 @@ app.post('/api/messages/mark-read/:currentUser/:recipient', authenticateJWT, asy
     io.to(currentUser.toLowerCase()).emit('messagesRead', { recipient: recipient.toLowerCase() });
     res.json({ message: 'Messages marked as read' });
   } catch (error) {
+    console.error(`Mark read error: ${error.message}`);
     res.status(500).json({ message: 'Failed to mark messages as read' });
   }
 });
