@@ -395,6 +395,28 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
   }
 });
 
+// Fixed route for retrieving profile pictures
+app.get('/Uploads/:id', async (req, res) => {
+  try {
+    const fileId = new mongoose.Types.ObjectId(req.params.id);
+    const downloadStream = gridFSBucket.openDownloadStream(fileId);
+    downloadStream.on('error', () => {
+      console.log(`File not found in GridFS: id=${req.params.id}`);
+      res.status(404).json({ message: 'File not found' });
+    });
+    const file = await gridFSBucket.find({ _id: fileId }).next();
+    if (file) {
+      res.set('Content-Type', file.contentType || 'application/octet-stream');
+      res.set('Content-Disposition', file.contentType.startsWith('image/') ? 'inline' : `attachment; filename="${file.filename}"`);
+      console.log(`Serving file from GridFS: id=${fileId}, filename=${file.filename}`);
+    }
+    downloadStream.pipe(res);
+  } catch (error) {
+    console.log(`Failed to retrieve file from GridFS: id=${req.params.id}, error=${error.message}`);
+    res.status(500).json({ message: 'Failed to retrieve file' });
+  }
+});
+
 app.get('/api/messages/:currentUser/:recipient', authenticateJWT, async (req, res) => {
   try {
     const { currentUser, recipient } = req.params;
