@@ -12,7 +12,8 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const socketIo = require('socket.io');
 const http = require('http');
 const cors = require('cors');
-
+const path = require('path'); // Added import
+const fs = require('fs');
 const app = express();
 const server = http.createServer(app);
 
