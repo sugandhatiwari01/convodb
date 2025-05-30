@@ -106,6 +106,9 @@ const messageSchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now },
 });
 
+
+
+
 const Message = mongoose.model('Message', messageSchema);
 
 // Passport Configuration for Google OAuth
@@ -148,14 +151,31 @@ passport.use(
 );
 
 // Multer for file uploads
-const storage = multer.memoryStorage();
+const uploadDir = path.join(__dirname, 'Uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const extension = path.extname(file.originalname).toLowerCase();
+    cb(null, `${req.body.username.toLowerCase()}_${Date.now()}${extension}`);
+  },
+});
+
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
-    if (allowedTypes.includes(file.mimetype)) cb(null, true);
-    else cb(new Error('Only JPEG, PNG, and PDF files allowed'), false);
+    const allowedTypes = ['image/jpeg', 'image/png' , 'image/jpg' , 'image/gif'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG and PNG images allowed'), false);
+    }
   },
 });
 
@@ -230,6 +250,7 @@ io.on('connection', (socket) => {
 });
 
 // Routes
+
 app.post('/api/users/register', async (req, res) => {
   const { email, username, password } = req.body;
   try {
@@ -328,16 +349,58 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
   try {
     const { username } = req.body;
     const file = req.file;
-    if (!file || !username) return res.status(400).json({ message: 'File and username required' });
-    const uploadStream = gridFSBucket.openUploadStream(file.originalname);
-    uploadStream.write(file.buffer);
-    uploadStream.end();
+    const authenticatedUser = req.user.username.toLowerCase();
+
+    if (!file || !username) {
+      if (file) fs.unlinkSync(file.path);
+      logger.warn('Missing file or username in profile picture upload', { username });
+      return res.status(400).json({ message: 'File and username are required' });
+    }
+
+    if (username.toLowerCase() !== authenticatedUser) {
+      if (file) fs.unlinkSync(file.path);
+      logger.warn('Username mismatch in profile picture upload', { requestedUsername: username, authenticatedUser });
+      return res.status(403).json({ message: 'Unauthorized to update this profile' });
+    }
+
+    const user = await User.findOne({ username: username.toLowerCase() });
+    if (!user) {
+      if (file) fs.unlinkSync(file.path);
+      logger.warn('User not found for profile picture upload', { username });
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const uploadStream = gridFSBucket.openUploadStream(file.originalname, {
+      contentType: file.mimetype,
+    });
+    const readStream = fs.createReadStream(file.path);
+    readStream.pipe(uploadStream);
+
+    uploadStream.on('error', (error) => {
+      logger.error('GridFS upload error', { error: error.message, username, file: file.originalname });
+      fs.unlinkSync(file.path);
+      res.status(500).json({ message: 'Failed to upload file to GridFS' });
+    });
+
     uploadStream.on('finish', async () => {
-      await User.updateOne({ username: username.toLowerCase() }, { profilePic: uploadStream.id.toString() });
-      res.json({ filename: uploadStream.id.toString() });
+      try {
+        await User.updateOne(
+          { username: username.toLowerCase() },
+          { profilePic: uploadStream.id.toString() }
+        );
+        logger.info('Profile picture updated successfully', { username, fileId: uploadStream.id.toString() });
+        fs.unlinkSync(file.path);
+        res.status(200).json({ filename: uploadStream.id.toString() });
+      } catch (error) {
+        logger.error('Error updating user profile picture', { error: error.message, username });
+        fs.unlinkSync(file.path);
+        res.status(500).json({ message: 'Failed to update profile picture' });
+      }
     });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to upload profile picture' });
+    logger.error('Profile picture upload failed', { error: error.message, username: req.body.username });
+    if (req.file) fs.unlinkSync(req.file.path);
+    res.status(500).json({ message: error.message || 'Failed to upload profile picture' });
   }
 });
 
