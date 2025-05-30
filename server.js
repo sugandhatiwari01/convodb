@@ -354,20 +354,20 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
 
     if (!file || !username) {
       if (file) fs.unlinkSync(file.path);
-      logger.warn('Missing file or username in profile picture upload', { username });
+      console.log(`Missing file or username in profile picture upload for ${username}`);
       return res.status(400).json({ message: 'File and username are required' });
     }
 
     if (username.toLowerCase() !== authenticatedUser) {
       if (file) fs.unlinkSync(file.path);
-      logger.warn('Username mismatch in profile picture upload', { requestedUsername: username, authenticatedUser });
+      console.log(`Username mismatch: requested=${username}, authenticated=${authenticatedUser}`);
       return res.status(403).json({ message: 'Unauthorized to update this profile' });
     }
 
     const user = await User.findOne({ username: username.toLowerCase() });
     if (!user) {
       if (file) fs.unlinkSync(file.path);
-      logger.warn('User not found for profile picture upload', { username });
+      console.log(`User not found: ${username}`);
       return res.status(404).json({ message: 'User not found' });
     }
 
@@ -378,7 +378,7 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
     readStream.pipe(uploadStream);
 
     uploadStream.on('error', (error) => {
-      logger.error('GridFS upload error', { error: error.message, username, file: file.originalname });
+      console.log(`GridFS upload error for ${username}: ${error.message}`);
       fs.unlinkSync(file.path);
       res.status(500).json({ message: 'Failed to upload file to GridFS' });
     });
@@ -389,19 +389,41 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
           { username: username.toLowerCase() },
           { profilePic: uploadStream.id.toString() }
         );
-        logger.info('Profile picture updated successfully', { username, fileId: uploadStream.id.toString() });
+        console.log(`Profile picture updated for ${username}, fileId=${uploadStream.id.toString()}`);
         fs.unlinkSync(file.path);
         res.status(200).json({ filename: uploadStream.id.toString() });
       } catch (error) {
-        logger.error('Error updating user profile picture', { error: error.message, username });
+        console.log(`Error updating profile picture for ${username}: ${error.message}`);
         fs.unlinkSync(file.path);
         res.status(500).json({ message: 'Failed to update profile picture' });
       }
     });
   } catch (error) {
-    logger.error('Profile picture upload failed', { error: error.message, username: req.body.username });
+    console.log(`Profile picture upload failed for ${req.body.username}: ${error.message}`);
     if (req.file) fs.unlinkSync(req.file.path);
     res.status(500).json({ message: error.message || 'Failed to upload profile picture' });
+  }
+});
+
+// Consolidated route for retrieving profile pictures (removed duplicate)
+app.get('/Uploads/:id', async (req, res) => {
+  try {
+    const fileId = new mongoose.Types.ObjectId(req.params.id);
+    const downloadStream = gridFSBucket.openDownloadStream(fileId);
+    downloadStream.on('error', () => {
+      console.log(`File not found in GridFS: id=${req.params.id}`);
+      res.status(404).json({ message: 'File not found' });
+    });
+    const file = await gridFSBucket.find({ _id: fileId }).next();
+    if (file) {
+      res.set('Content-Type', file.contentType || 'application/octet-stream');
+      res.set('Content-Disposition', file.contentType.startsWith('image/') ? 'inline' : `attachment; filename="${file.filename}"`);
+      console.log(`Serving file from GridFS: id=${fileId}, filename=${file.filename}`);
+    }
+    downloadStream.pipe(res);
+  } catch (error) {
+    console.log(`Failed to retrieve file from GridFS: id=${req.params.id}, error=${error.message}`);
+    res.status(500).json({ message: 'Failed to retrieve file' });
   }
 });
 
