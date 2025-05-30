@@ -163,7 +163,8 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const extension = path.extname(file.originalname).toLowerCase();
-    cb(null, `${req.body.username.toLowerCase()}_${Date.now()}${extension}`);
+    const username = req.body.username || 'unknown'; // Fallback if username is missing
+    cb(null, `${username.toLowerCase()}_${Date.now()}${extension}`);
   },
 });
 
@@ -171,11 +172,11 @@ const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png' , 'image/jpg' , 'image/gif'];
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif'];
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Only JPEG and PNG images allowed'), false);
+      cb(new Error('Only JPEG, PNG, JPG, and GIF images allowed'), false);
     }
   },
 });
@@ -399,12 +400,31 @@ app.post('/api/users/uploadProfilePic', authenticateJWT, upload.single('file'), 
       }
     });
   } catch (error) {
-    console.log(`Profile picture upload failed for ${req.body.username}: ${error.message}`);
+    console.log(`Profile picture upload failed for ${req.body.username || 'unknown'}: ${error.message}`);
     if (req.file) fs.unlinkSync(req.file.path);
     res.status(500).json({ message: error.message || 'Failed to upload profile picture' });
   }
 });
 
+// Consolidated route for retrieving profile pictures
+app.get('/Uploads/:id', async (req, res) => {
+  try {
+    const fileId = new mongoose.Types.ObjectId(req.params.id);
+    const file = await gridFSBucket.find({ _id: fileId }).next();
+    if (!file) {
+      console.log(`File not found in GridFS: id=${req.params.id}`);
+      return res.status(404).json({ message: 'File not found' });
+    }
+    const downloadStream = gridFSBucket.openDownloadStream(fileId);
+    res.set('Content-Type', file.contentType || 'application/octet-stream');
+    res.set('Content-Disposition', file.contentType && file.contentType.startsWith('image/') ? 'inline' : `attachment; filename="${file.filename}"`);
+    console.log(`Serving file from GridFS: id=${fileId}, filename=${file.filename}`);
+    downloadStream.pipe(res);
+  } catch (error) {
+    console.log(`Failed to retrieve file from GridFS: id=${req.params.id}, error=${error.message}`);
+    res.status(500).json({ message: 'Failed to retrieve file' });
+  }
+});
 // Consolidated route for retrieving profile pictures (removed duplicate)
 app.get('/Uploads/:id', async (req, res) => {
   try {
